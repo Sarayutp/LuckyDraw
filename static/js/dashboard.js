@@ -233,9 +233,19 @@ function updateHistoryList(history) {
                 <div class="flex justify-between items-start">
                     <div class="flex-1">
                         <div class="font-semibold text-gray-800">
-                            ${eventType === 'classic' ? '🎉' : '🎁'} ${escapeHtml(record.receiver_name)}
-                            ${record.prize_name ? ` ได้รับ ${escapeHtml(record.prize_name)}` : ''}
-                            ${record.giver_name ? ` จาก ${escapeHtml(record.giver_name)}` : ''}
+                            ${(() => {
+                                if (eventType === 'classic') {
+                                    return `🎉 ${escapeHtml(record.receiver_name)}${record.prize_name ? ` ได้รับ ${escapeHtml(record.prize_name)}` : ''}`;
+                                } else {
+                                    // Exchange mode
+                                    if (record.giver_name) {
+                                        return `🎁 ${escapeHtml(record.receiver_name)} ได้รับจาก ${escapeHtml(record.giver_name)}`;
+                                    } else {
+                                        // First draw - show only the selected person
+                                        return `🎯 ${escapeHtml(record.receiver_name)}`;
+                                    }
+                                }
+                            })()}
                         </div>
                         <div class="text-xs text-gray-600 mt-1">${record.drawn_at}</div>
                     </div>
@@ -1185,18 +1195,34 @@ function showWinnerAnnouncement(data) {
             setTimeout(() => animateWinnerCardsIn(), 100);
         }
     } else {
-        // Exchange mode (keep simpler design)
-        title.innerHTML = data.is_test_mode ? '🧪 ผลทดสอบ!' : '🎁 การแลกเปลี่ยนของขวัญ!';
-        content.innerHTML = `
-            <div class="flex justify-center">
-                <div class="winner-card-modal bg-slate-800 rounded-lg shadow-lg border-2 border-yellow-400 p-8 text-center max-w-md">
-                    <div class="text-2xl font-bold text-white mb-4">${escapeHtml(data.giver_name)}</div>
-                    <div class="text-lg text-slate-300 mb-4">จะให้ของขวัญแก่</div>
-                    <div class="text-4xl font-bold text-yellow-300">${escapeHtml(data.receiver_name)}</div>
+        // Exchange mode 
+        if (data.is_first_draw) {
+            // First draw - show only the person selected
+            title.innerHTML = data.is_test_mode ? '🧪 ผลทดสอบ!' : '🎯 ผู้ถูกเลือก!';
+            content.innerHTML = `
+                <div class="flex justify-center">
+                    <div class="winner-card-modal bg-slate-800 rounded-lg shadow-lg border-2 border-yellow-400 p-8 text-center max-w-md">
+                        <div class="text-lg font-semibold text-slate-400 mb-3">ผู้ที่ถูกเลือก</div>
+                        <div class="text-4xl font-bold text-yellow-300 mb-4 break-words">${escapeHtml(data.receiver_name)}</div>
+                        <div class="text-lg text-slate-300">จะเป็นคนแรกที่จับรางวัล</div>
+                    </div>
                 </div>
-            </div>
-            ${data.is_test_mode ? '<div class="text-center text-yellow-200 mt-6 text-lg">🧪 นี่เป็นโหมดทดสอบ - ไม่ถูกบันทึก</div>' : ''}
-        `;
+                ${data.is_test_mode ? '<div class="text-center text-yellow-200 mt-6 text-lg">🧪 นี่เป็นโหมดทดสอบ - ไม่ถูกบันทึก</div>' : ''}
+            `;
+        } else {
+            // Subsequent draws - show "receiver ได้รับจาก giver"
+            title.innerHTML = data.is_test_mode ? '🧪 ผลทดสอบ!' : '🎁 การแลกเปลี่ยนของขวัญ!';
+            content.innerHTML = `
+                <div class="flex justify-center">
+                    <div class="winner-card-modal bg-slate-800 rounded-lg shadow-lg border-2 border-yellow-400 p-8 text-center max-w-lg">
+                        <div class="text-4xl font-bold text-yellow-300 mb-4 break-words">${escapeHtml(data.receiver_name)}</div>
+                        <div class="text-lg text-slate-300 mb-4">ได้รับจาก</div>
+                        <div class="text-2xl font-bold text-white break-words">${escapeHtml(data.giver_name)}</div>
+                    </div>
+                </div>
+                ${data.is_test_mode ? '<div class="text-center text-yellow-200 mt-6 text-lg">🧪 นี่เป็นโหมดทดสอบ - ไม่ถูกบันทึก</div>' : ''}
+            `;
+        }
         
         setTimeout(() => animateWinnerCardsIn(), 100);
     }
