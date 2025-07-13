@@ -57,33 +57,7 @@ def format_thai_datetime(dt):
 
 @app.route('/')
 def index():
-    return render_template_string('''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>LuckyDraw System</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 40px; }
-            .container { max-width: 600px; margin: 0 auto; text-align: center; }
-            h1 { color: #2A4A7C; }
-            p { color: #666; line-height: 1.6; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎉 LuckyDraw System v1.6</h1>
-            <p>ระบบจับรางวัลอัจฉริยะ รองรับทั้งโหมดคลาสสิกและแลกเปลี่ยนของขวัญ</p>
-            <p><strong>Phase 1: MVP - Core Logic</strong> พร้อมใช้งาน!</p>
-            <hr>
-            <p>การใช้งาน:</p>
-            <ul style="text-align: left;">
-                <li>GET /event/&lt;event_id&gt; - หน้า Dashboard อีเวนต์</li>
-                <li>POST /api/event/&lt;event_id&gt;/draw - จับรางวัล</li>
-            </ul>
-        </div>
-    </body>
-    </html>
-    ''')
+    return render_template('index.html')
 
 @app.route('/event/<int:event_id>')
 def event_dashboard(event_id):
@@ -1050,6 +1024,80 @@ def export_history(event_id):
         as_attachment=True,
         download_name=f'event_{event.id}_history.xlsx'
     )
+
+@app.route('/api/create_event', methods=['POST'])
+def create_event():
+    data = request.get_json()
+    
+    if not data or 'name' not in data or 'event_type' not in data:
+        return jsonify({'error': 'Name and event_type are required'}), 400
+    
+    try:
+        name = data['name'].strip()
+        event_type = data['event_type'].strip()
+        
+        if not name:
+            return jsonify({'error': 'Event name cannot be empty'}), 400
+        
+        if event_type not in ['classic', 'exchange']:
+            return jsonify({'error': 'Event type must be "classic" or "exchange"'}), 400
+        
+        # Create new event
+        event = Event(
+            name=name,
+            event_type=event_type,
+            created_at=get_thai_time()
+        )
+        
+        db.session.add(event)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Event created successfully',
+            'event_id': event.id,
+            'event': {
+                'id': event.id,
+                'name': event.name,
+                'event_type': event.event_type,
+                'created_at': format_thai_datetime(event.created_at)
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/events', methods=['GET'])
+def get_events():
+    try:
+        events = Event.query.order_by(Event.created_at.desc()).all()
+        
+        events_data = []
+        for event in events:
+            # Get participant and prize counts
+            participant_count = Participant.query.filter_by(event_id=event.id).count()
+            prize_count = Prize.query.filter_by(event_id=event.id).count() if event.event_type == 'classic' else 0
+            history_count = History.query.filter_by(event_id=event.id).count()
+            
+            events_data.append({
+                'id': event.id,
+                'name': event.name,
+                'event_type': event.event_type,
+                'created_at': format_thai_datetime(event.created_at),
+                'participant_count': participant_count,
+                'prize_count': prize_count,
+                'history_count': history_count,
+                'is_test_mode': event.is_test_mode
+            })
+        
+        return jsonify({
+            'success': True,
+            'events': events_data
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # Initialize database tables
 with app.app_context():

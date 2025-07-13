@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LuckyDraw System v1.6</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+    <style>
+        .hero-gradient {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card-hover:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        .sparkle {
+            animation: sparkle 2s infinite;
+        }
+        @keyframes sparkle {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.05); }
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-50">
+    <!-- Hero Section -->
+    <div class="hero-gradient">
+        <div class="container mx-auto px-4 py-16">
+            <div class="text-center text-white">
+                <h1 class="text-5xl md:text-6xl font-bold mb-6 sparkle">
+                    🎉 LuckyDraw System v1.6
+                </h1>
+                <p class="text-xl md:text-2xl mb-8 opacity-90">
+                    ระบบจับรางวัลอัจฉริยะ รองรับทั้งโหมดคลาสสิกและแลกเปลี่ยนของขวัญ
+                </p>
+                <div class="flex flex-col md:flex-row gap-4 justify-center mt-8">
+                    <button onclick="showCreateEventModal()" 
+                            class="bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-bold py-4 px-8 rounded-lg text-lg transition duration-300 transform hover:scale-105">
+                        🚀 สร้างอีเวนต์ใหม่
+                    </button>
+                    <button onclick="showExistingEvents()" 
+                            class="bg-transparent border-2 border-white text-white hover:bg-white hover:text-gray-900 font-bold py-4 px-8 rounded-lg text-lg transition duration-300">
+                        📋 ดูอีเวนต์ที่มีอยู่
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Features Section -->
+    <div class="container mx-auto px-4 py-16">
+        <h2 class="text-3xl font-bold text-center text-gray-800 mb-12">✨ ฟีเจอร์เด่น</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <!-- Classic Mode -->
+            <div class="bg-white rounded-lg shadow-lg p-6 card-hover transition duration-300">
+                <div class="text-4xl mb-4">🎯</div>
+                <h3 class="text-xl font-bold text-gray-800 mb-3">โหมดคลาสสิก</h3>
+                <p class="text-gray-600">จับรางวัลแบบดั้งเดิม สุ่มผู้โชคดีได้รับรางวัลต่างๆ พร้อมระบบจัดการรางวัลครบครัน</p>
+            </div>
+
+            <!-- Exchange Mode -->
+            <div class="bg-white rounded-lg shadow-lg p-6 card-hover transition duration-300">
+                <div class="text-4xl mb-4">🎁</div>
+                <h3 class="text-xl font-bold text-gray-800 mb-3">โหมดแลกเปลี่ยน</h3>
+                <p class="text-gray-600">แลกเปลี่ยนของขวัญแบบสุ่ม เหมาะสำหรับปาร์ตี้หรืองานเฉลิมฉลอง</p>
+            </div>
+
+            <!-- Participant Management -->
+            <div class="bg-white rounded-lg shadow-lg p-6 card-hover transition duration-300">
+                <div class="text-4xl mb-4">👥</div>
+                <h3 class="text-xl font-bold text-gray-800 mb-3">จัดการผู้เข้าร่วม</h3>
+                <p class="text-gray-600">เพิ่ม แก้ไข ลบผู้เข้าร่วม หรืออัปโหลดจากไฟล์ Excel/CSV</p>
+            </div>
+
+            <!-- Audio & Animation -->
+            <div class="bg-white rounded-lg shadow-lg p-6 card-hover transition duration-300">
+                <div class="text-4xl mb-4">🎵</div>
+                <h3 class="text-xl font-bold text-gray-800 mb-3">เสียงและอนิเมชัน</h3>
+                <p class="text-gray-600">เสียงประกอบและอนิเมชันสวยงาม ปรับแต่งได้ตามต้องการ</p>
+            </div>
+
+            <!-- Test Mode -->
+            <div class="bg-white rounded-lg shadow-lg p-6 card-hover transition duration-300">
+                <div class="text-4xl mb-4">🧪</div>
+                <h3 class="text-xl font-bold text-gray-800 mb-3">โหมดทดสอบ</h3>
+                <p class="text-gray-600">ทดสอบการจับรางวัลโดยไม่กระทบข้อมูลจริง พร้อมระบบ Undo</p>
+            </div>
+
+            <!-- Export & History -->
+            <div class="bg-white rounded-lg shadow-lg p-6 card-hover transition duration-300">
+                <div class="text-4xl mb-4">📊</div>
+                <h3 class="text-xl font-bold text-gray-800 mb-3">ประวัติและรายงาน</h3>
+                <p class="text-gray-600">บันทึกประวัติการจับรางวัล ส่งออกเป็น Excel ได้</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Event Modal -->
+    <div id="createEventModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg p-8 max-w-md mx-4 w-full">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800">🎯 สร้างอีเวนต์ใหม่</h2>
+                <button onclick="closeCreateEventModal()" class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+            </div>
+            
+            <form id="createEventForm" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">ชื่ออีเวนต์</label>
+                    <input type="text" id="eventName" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="เช่น งานปาร์ตี้สิ้นปี 2025" required>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-3">ประเภทอีเวนต์</label>
+                    <div class="space-y-3">
+                        <label class="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                            <input type="radio" name="eventType" value="classic" class="mr-3" checked>
+                            <div>
+                                <div class="font-medium text-gray-800">🎯 โหมดคลาสสิก</div>
+                                <div class="text-sm text-gray-600">จับรางวัลแบบดั้งเดิม มีรางวัลให้ผู้โชคดี</div>
+                            </div>
+                        </label>
+                        <label class="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                            <input type="radio" name="eventType" value="exchange" class="mr-3">
+                            <div>
+                                <div class="font-medium text-gray-800">🎁 โหมดแลกเปลี่ยน</div>
+                                <div class="text-sm text-gray-600">แลกเปลี่ยนของขวัญระหว่างผู้เข้าร่วม</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="flex justify-end space-x-4 pt-4 border-t">
+                    <button type="button" onclick="closeCreateEventModal()" 
+                            class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition duration-200">
+                        ยกเลิก
+                    </button>
+                    <button type="submit" 
+                            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition duration-200">
+                        🚀 สร้างอีเวนต์
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Existing Events Modal -->
+    <div id="existingEventsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg p-8 max-w-2xl mx-4 w-full max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800">📋 อีเวนต์ที่มีอยู่</h2>
+                <button onclick="closeExistingEventsModal()" class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+            </div>
+            
+            <div id="eventsList" class="space-y-4">
+                <!-- Events will be loaded here -->
+            </div>
+            
+            <div class="flex justify-center mt-6">
+                <button onclick="closeExistingEventsModal()" 
+                        class="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition duration-200">
+                    ปิด
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let isCreatingEvent = false;
+
+        // Show create event modal
+        function showCreateEventModal() {
+            document.getElementById('createEventModal').classList.remove('hidden');
+            document.getElementById('eventName').focus();
+        }
+
+        // Close create event modal
+        function closeCreateEventModal() {
+            document.getElementById('createEventModal').classList.add('hidden');
+            document.getElementById('createEventForm').reset();
+        }
+
+        // Show existing events modal
+        function showExistingEvents() {
+            document.getElementById('existingEventsModal').classList.remove('hidden');
+            loadExistingEvents();
+        }
+
+        // Close existing events modal
+        function closeExistingEventsModal() {
+            document.getElementById('existingEventsModal').classList.add('hidden');
+        }
+
+        // Create event form submission
+        document.getElementById('createEventForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (isCreatingEvent) return;
+            
+            const eventName = document.getElementById('eventName').value.trim();
+            const eventType = document.querySelector('input[name="eventType"]:checked').value;
+            
+            if (!eventName) {
+                alert('กรุณากรอกชื่ออีเวนต์');
+                return;
+            }
+            
+            isCreatingEvent = true;
+            const submitButton = document.querySelector('#createEventForm button[type="submit"]');
+            submitButton.disabled = true;
+            submitButton.textContent = '🔄 กำลังสร้าง...';
+            
+            try {
+                const response = await fetch('/api/create_event', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name: eventName,
+                        event_type: eventType
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Trigger confetti celebration
+                    confetti({
+                        particleCount: 100,
+                        spread: 70,
+                        origin: { y: 0.6 }
+                    });
+                    
+                    // Redirect to event dashboard
+                    window.location.href = `/event/${data.event_id}`;
+                } else {
+                    alert(data.error || 'เกิดข้อผิดพลาดในการสร้างอีเวนต์');
+                }
+                
+            } catch (error) {
+                console.error('Error creating event:', error);
+                alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+            } finally {
+                isCreatingEvent = false;
+                submitButton.disabled = false;
+                submitButton.textContent = '🚀 สร้างอีเวนต์';
+            }
+        });
+
+        // Load existing events
+        async function loadExistingEvents() {
+            const eventsList = document.getElementById('eventsList');
+            
+            try {
+                eventsList.innerHTML = '<div class="text-center py-4 text-gray-500">🔄 กำลังโหลด...</div>';
+                
+                const response = await fetch('/api/events');
+                const data = await response.json();
+                
+                if (data.success && data.events.length > 0) {
+                    eventsList.innerHTML = data.events.map(event => `
+                        <div class="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition duration-200">
+                            <div class="flex justify-between items-start">
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2 mb-2">
+                                        <h3 class="font-semibold text-gray-800">${escapeHtml(event.name)}</h3>
+                                        ${event.is_test_mode ? '<span class="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded-full">🧪 โหมดทดสอบ</span>' : ''}
+                                    </div>
+                                    <div class="flex items-center gap-4 text-sm text-gray-600 mb-2">
+                                        <span class="px-2 py-1 rounded-full text-xs ${event.event_type === 'classic' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}">
+                                            ${event.event_type === 'classic' ? '🎯 คลาสสิก' : '🎁 แลกเปลี่ยน'}
+                                        </span>
+                                        <span>สร้างเมื่อ: ${event.created_at}</span>
+                                        <span>ID: ${event.id}</span>
+                                    </div>
+                                    <div class="flex items-center gap-4 text-xs text-gray-500">
+                                        <span>👥 ผู้เข้าร่วม: ${event.participant_count}</span>
+                                        ${event.event_type === 'classic' ? `<span>🎁 รางวัล: ${event.prize_count}</span>` : ''}
+                                        <span>📋 ประวัติ: ${event.history_count}</span>
+                                    </div>
+                                </div>
+                                <button onclick="window.location.href='/event/${event.id}'" 
+                                        class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition duration-200 text-sm">
+                                    เข้าสู่อีเวนต์
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    eventsList.innerHTML = `
+                        <div class="text-center py-8 text-gray-500">
+                            <div class="text-4xl mb-4">📝</div>
+                            <p>ยังไม่มีอีเวนต์ที่สร้างไว้</p>
+                            <button onclick="closeExistingEventsModal(); showCreateEventModal();" 
+                                    class="mt-4 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition duration-200">
+                                สร้างอีเวนต์แรก
+                            </button>
+                        </div>
+                    `;
+                }
+                
+            } catch (error) {
+                console.error('Error loading events:', error);
+                eventsList.innerHTML = '<div class="text-center py-4 text-red-500">เกิดข้อผิดพลาดในการโหลดข้อมูล</div>';
+            }
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Auto-trigger confetti on page load
+        window.addEventListener('load', function() {
+            setTimeout(() => {
+                confetti({
+                    particleCount: 50,
+                    spread: 60,
+                    origin: { y: 0.7 }
+                });
+            }, 500);
+        });
+
+        // Close modals when clicking outside
+        document.getElementById('createEventModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeCreateEventModal();
+            }
+        });
+
+        document.getElementById('existingEventsModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeExistingEventsModal();
+            }
+        });
+    </script>
+</body>
+</html>
