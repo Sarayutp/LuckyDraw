@@ -61,15 +61,28 @@ function setupEventListeners() {
         saveSettings();
     });
     
+    // Edit participant form
+    document.getElementById('editParticipantForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        saveEditedParticipant();
+    });
+    
+    // Edit prize form
+    document.getElementById('editPrizeForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        saveEditedPrize();
+    });
+    
     // Test mode toggle
     document.getElementById('testModeToggle').addEventListener('change', function(e) {
         toggleTestMode();
     });
     
     // Undo button
-    document.getElementById('undoButton').addEventListener('click', function() {
-        undoLastDraw();
-    });
+    document.getElementById('undoButton').addEventListener('click', undoLastDraw);
+    
+    // Export button
+    document.getElementById('exportButton').addEventListener('click', exportHistory);
     
     // File upload forms
     document.getElementById('uploadParticipantsForm').addEventListener('submit', function(e) {
@@ -98,36 +111,18 @@ function setupEventListeners() {
 function initializeAudio() {
     drumRollSound = document.getElementById('drumRollSound');
     tadaSound = document.getElementById('tadaSound');
-    
-    // Set volume levels and create fallback sounds
-    if (drumRollSound) {
-        drumRollSound.volume = 0.6;
-        // Add error handler for missing audio files
-        drumRollSound.addEventListener('error', function() {
-            console.warn('Drum roll audio file not found, using Web Audio fallback');
-        });
-        // Check if audio can load
-        drumRollSound.addEventListener('canplay', function() {
-            console.log('Drum roll audio loaded successfully');
-        });
-    }
-    if (tadaSound) {
-        tadaSound.volume = 0.8;
-        // Add error handler for missing audio files
-        tadaSound.addEventListener('error', function() {
-            console.warn('Tada audio file not found, using Web Audio fallback');
-        });
-        // Check if audio can load
-        tadaSound.addEventListener('canplay', function() {
-            console.log('Tada audio loaded successfully');
-        });
-    }
-    
-    // Initialize Web Audio API context for fallback sounds
-    initializeWebAudio();
-    
+    backgroundMusic = document.getElementById('backgroundMusic');
+
+    if (drumRollSound) drumRollSound.volume = 0.6;
+    if (tadaSound) tadaSound.volume = 0.8;
+    if (backgroundMusic) backgroundMusic.volume = 0.3;
+
     // Enable audio on first user interaction
-    document.addEventListener('click', enableAudio, { once: true });
+    document.addEventListener('click', () => {
+        if (backgroundMusic && backgroundMusic.paused && eventConfig.music && eventConfig.music !== 'none') {
+            backgroundMusic.play().catch(e => console.warn("Background music autoplay failed.", e));
+        }
+    }, { once: true });
 }
 
 // Load current event state
@@ -163,8 +158,22 @@ function updateParticipantsList(participants) {
     } else {
         participantsList.innerHTML = participants.map(participant => `
             <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <span class="font-medium text-gray-800">${escapeHtml(participant.name)}</span>
-                <span class="text-xs text-gray-500">ID: ${participant.id}</span>
+                <div class="flex-1">
+                    <span class="font-medium text-gray-800">${escapeHtml(participant.name)}</span>
+                    <div class="text-xs text-gray-500 mt-1">ID: ${participant.id}</div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button onclick="openEditParticipantModal(${participant.id}, '${escapeHtml(participant.name)}')" 
+                            class="text-blue-600 hover:text-blue-800 text-sm"
+                            title="แก้ไขผู้เข้าร่วม">
+                        ✏️
+                    </button>
+                    <button onclick="deleteParticipant(${participant.id}, '${escapeHtml(participant.name)}')" 
+                            class="text-red-600 hover:text-red-800 text-sm"
+                            title="ลบผู้เข้าร่วม">
+                        🗑️
+                    </button>
+                </div>
             </div>
         `).join('');
     }
@@ -184,8 +193,23 @@ function updatePrizesList(prizes) {
     } else {
         prizesList.innerHTML = prizes.map(prize => `
             <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <span class="font-medium text-gray-800">${escapeHtml(prize.name)}</span>
-                <span class="text-xs text-blue-600 font-semibold">เหลือ ${prize.remaining_quantity}</span>
+                <div class="flex-1">
+                    <span class="font-medium text-gray-800">${escapeHtml(prize.name)}</span>
+                    <div class="text-xs text-gray-500 mt-1">ทั้งหมด ${prize.total_quantity} | เหลือ ${prize.remaining_quantity}</div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-xs text-blue-600 font-semibold">เหลือ ${prize.remaining_quantity}</span>
+                    <button onclick="openEditPrizeModal(${prize.id}, '${escapeHtml(prize.name)}', ${prize.total_quantity}, ${prize.remaining_quantity})" 
+                            class="text-purple-600 hover:text-purple-800 text-sm"
+                            title="แก้ไขรางวัล">
+                        ✏️
+                    </button>
+                    <button onclick="deletePrize(${prize.id}, '${escapeHtml(prize.name)}', ${prize.total_quantity - prize.remaining_quantity})" 
+                            class="text-red-600 hover:text-red-800 text-sm"
+                            title="ลบรางวัล">
+                        🗑️
+                    </button>
+                </div>
             </div>
         `).join('');
     }
@@ -384,39 +408,68 @@ function closeWinnerModal() {
     modal.classList.add('hidden');
 }
 
-// Start randomization effect
 function startRandomizationEffect() {
     const overlay = document.getElementById('randomizationOverlay');
-    const randomizingText = document.getElementById('randomizingText');
-    
     overlay.classList.remove('hidden');
-    
-    // Play drum roll sound
+
+    wasMusicPlaying = backgroundMusic && !backgroundMusic.paused;
+    if (wasMusicPlaying) {
+        backgroundMusic.pause();
+    }
+
     playDrumRollSound();
-    
-    // Start text randomization
-    const possibleTexts = ['🎲', '🎯', '🎪', '✨', '🎊', '🎉'];
-    let textIndex = 0;
-    
-    window.randomizationInterval = setInterval(() => {
-        randomizingText.textContent = possibleTexts[textIndex % possibleTexts.length];
-        textIndex++;
-    }, 100);
+
+    const randomizingText = document.getElementById('randomizingText');
+    const animationType = eventConfig.random_animation || 'scrolling_names';
+    startRandomAnimation(randomizingText, animationType);
 }
 
 // Stop randomization effect
 function stopRandomizationEffect() {
-    const overlay = document.getElementById('randomizationOverlay');
-    
-    overlay.classList.add('hidden');
-    
-    // Stop drum roll sound
+    document.getElementById('randomizationOverlay').classList.add('hidden');
     stopDrumRollSound();
-    
-    // Stop text randomization
     if (window.randomizationInterval) {
         clearInterval(window.randomizationInterval);
         window.randomizationInterval = null;
+    }
+}
+
+// Audio playback functions
+function playDrumRollSound() {
+    if (drumRollSound) {
+        drumRollSound.currentTime = 0;
+        drumRollSound.play().catch(e => console.warn('Drum roll playback failed.', e));
+    }
+}
+
+function stopDrumRollSound() {
+    if (drumRollSound) {
+        drumRollSound.pause();
+        drumRollSound.currentTime = 0;
+    }
+}
+
+function playTadaSound() {
+    if (tadaSound) {
+        tadaSound.currentTime = 0;
+        tadaSound.play().catch(e => console.warn('Tada playback failed.', e));
+        tadaSound.onended = () => {
+            if (wasMusicPlaying) {
+                playBackgroundMusic();
+                wasMusicPlaying = false;
+            }
+        };
+    } else if (wasMusicPlaying) {
+        setTimeout(() => {
+            playBackgroundMusic();
+            wasMusicPlaying = false;
+        }, 1000);
+    }
+}
+
+function playBackgroundMusic() {
+    if (backgroundMusic && eventConfig.music && eventConfig.music !== 'none') {
+        backgroundMusic.play().catch(e => console.warn("Could not resume background music.", e));
     }
 }
 
@@ -708,63 +761,59 @@ async function saveSettings() {
     try {
         const response = await fetch(`/api/event/${eventId}/settings`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(formData)
         });
-        
         const data = await response.json();
-        
         if (data.success) {
             eventConfig = data.config;
             applyEventConfig();
             closeSettingsModal();
             showSuccess('บันทึกการตั้งค่าเรียบร้อยแล้ว');
         } else {
-            showError(data.error || 'เกิดข้อผิดพลาดในการบันทึกการตั้งค่า');
+            showError(data.error || 'เกิดข้อผิดพลาดในการบันทึก');
         }
-        
     } catch (error) {
-        console.error('Error saving settings:', error);
-        showError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+        showError('เกิดข้อผิดพลาดในการเชื่อมต่อ');
     }
 }
 
 // Apply event configuration to the UI
 function applyEventConfig() {
     if (!eventConfig) return;
-    
-    // Update draw button text
+
     const drawButton = document.getElementById('drawButton');
     if (drawButton && eventConfig.draw_text) {
-        const buttonText = drawButton.innerHTML;
-        const newText = buttonText.replace(/🎲 .+/, `🎲 ${eventConfig.draw_text}`);
-        drawButton.innerHTML = newText;
+        drawButton.innerHTML = `🎲 ${escapeHtml(eventConfig.draw_text)}`;
     }
-    
-    // Apply background image
-    if (eventConfig.background_url) {
-        document.body.style.backgroundImage = `url('${eventConfig.background_url}')`;
-        document.body.style.backgroundSize = 'cover';
-        document.body.style.backgroundPosition = 'center';
-        document.body.style.backgroundAttachment = 'fixed';
-    } else {
-        document.body.style.backgroundImage = '';
-    }
-    
-    // Apply logo
+
+    document.body.style.backgroundImage = eventConfig.background_url ? `url('${eventConfig.background_url}')` : '';
+    document.body.style.backgroundSize = 'cover';
+    document.body.style.backgroundPosition = 'center';
+    document.body.style.backgroundAttachment = 'fixed';
+
     const logo = document.getElementById('eventLogo');
     if (logo) {
         if (eventConfig.logo_url) {
             logo.src = eventConfig.logo_url;
             logo.classList.remove('hidden');
-            logo.onerror = function() {
-                console.warn('Failed to load logo:', eventConfig.logo_url);
-                logo.classList.add('hidden');
-            };
+            logo.onerror = () => logo.classList.add('hidden');
         } else {
             logo.classList.add('hidden');
+        }
+    }
+    
+    // Apply background music
+    if (backgroundMusic) {
+        const musicFile = eventConfig.music || 'none';
+        if (musicFile !== 'none') {
+            const currentSrc = backgroundMusic.src || '';
+            if (!currentSrc.endsWith(musicFile)) {
+                backgroundMusic.src = `/static/audio/${musicFile}`;
+            }
+            backgroundMusic.play().catch(e => console.warn("Autoplay for background music might be blocked by the browser.", e));
+        } else {
+            backgroundMusic.pause();
         }
     }
 }
@@ -1086,7 +1135,7 @@ function showWinnerAnnouncement(data) {
             
             // Create winner cards grid
             const winnersGrid = data.results.map((result, index) => `
-                <div class="winner-card-modal bg-slate-800 rounded-lg shadow-lg border-2 border-yellow-400 p-6 text-center transform hover:scale-105 transition-transform duration-300">
+                <div class="winner-card-modal bg-slate-800 rounded-lg shadow-lg border-2 border-yellow-400 p-4 md:p-6 text-center transform hover:scale-105 transition-transform duration-300 w-56 md:w-64 flex-shrink-0">
                     <div class="text-sm font-semibold text-slate-400 mb-2">WINNER #${index + 1}</div>
                     <div class="text-2xl md:text-3xl font-bold text-white mb-4 break-words">${escapeHtml(result.winner_name)}</div>
                     <div class="flex justify-center mb-3">
@@ -1099,8 +1148,10 @@ function showWinnerAnnouncement(data) {
             `).join('');
             
             content.innerHTML = `
-                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
-                    ${winnersGrid}
+                <div class="w-full flex justify-center">
+                    <div class="flex flex-wrap justify-center gap-4 md:gap-6 max-w-6xl">
+                        ${winnersGrid}
+                    </div>
                 </div>
                 ${data.is_test_mode ? '<div class="text-center text-yellow-200 mt-6 text-lg">🧪 นี่เป็นโหมดทดสอบ - ไม่ถูกบันทึก</div>' : ''}
             `;
@@ -1384,6 +1435,243 @@ function getSelectedPrizes() {
     return selectedPrizes;
 }
 
+function exportHistory() {
+    window.location.href = `/api/event/${eventId}/export_history`;
+}
+
+// Edit Prize Modal Functions
+function openEditPrizeModal(prizeId, prizeName, totalQuantity, remainingQuantity) {
+    const drawnQuantity = totalQuantity - remainingQuantity;
+    
+    document.getElementById('editPrizeId').value = prizeId;
+    document.getElementById('editPrizeName').value = prizeName;
+    document.getElementById('editPrizeRemainingQuantity').value = remainingQuantity;
+    
+    // Store drawn quantity as data attribute for calculation
+    document.getElementById('editPrizeRemainingQuantity').dataset.drawnQuantity = drawnQuantity;
+    
+    // Calculate and display total quantity
+    updateTotalQuantityDisplay();
+    
+    // Add event listener for real-time calculation
+    const remainingInput = document.getElementById('editPrizeRemainingQuantity');
+    remainingInput.addEventListener('input', updateTotalQuantityDisplay);
+    
+    const modal = document.getElementById('editPrizeModal');
+    modal.classList.remove('hidden');
+}
+
+function updateTotalQuantityDisplay() {
+    const remainingInput = document.getElementById('editPrizeRemainingQuantity');
+    const totalInput = document.getElementById('editPrizeTotalQuantity');
+    
+    const drawnQuantity = parseInt(remainingInput.dataset.drawnQuantity) || 0;
+    const remainingQuantity = parseInt(remainingInput.value) || 0;
+    const newTotalQuantity = drawnQuantity + remainingQuantity;
+    
+    totalInput.value = newTotalQuantity;
+}
+
+function closeEditPrizeModal() {
+    const modal = document.getElementById('editPrizeModal');
+    modal.classList.add('hidden');
+    
+    // Remove event listener
+    const remainingInput = document.getElementById('editPrizeRemainingQuantity');
+    remainingInput.removeEventListener('input', updateTotalQuantityDisplay);
+    
+    // Clear form
+    document.getElementById('editPrizeForm').reset();
+}
+
+async function saveEditedPrize() {
+    const prizeId = document.getElementById('editPrizeId').value;
+    const name = document.getElementById('editPrizeName').value.trim();
+    const remainingQuantity = parseInt(document.getElementById('editPrizeRemainingQuantity').value);
+    const drawnQuantity = parseInt(document.getElementById('editPrizeRemainingQuantity').dataset.drawnQuantity) || 0;
+    const totalQuantity = drawnQuantity + remainingQuantity;
+    
+    if (!name) {
+        showError('กรุณากรอกชื่อรางวัล');
+        return;
+    }
+    
+    if (isNaN(remainingQuantity) || remainingQuantity < 0) {
+        showError('กรุณากรอกจำนวนที่เหลือที่ถูกต้อง');
+        return;
+    }
+    
+    const submitButton = document.querySelector('#editPrizeForm button[type="submit"]');
+    submitButton.disabled = true;
+    submitButton.textContent = 'กำลังบันทึก...';
+    
+    try {
+        const response = await fetch(`/api/event/${eventId}/edit_prize/${prizeId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                name: name,
+                remaining_quantity: remainingQuantity
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showSuccess(data.message || 'แก้ไขรางวัลเรียบร้อยแล้ว');
+            closeEditPrizeModal();
+            loadEventState(); // Refresh the lists
+        } else {
+            showError(data.error || 'เกิดข้อผิดพลาดในการแก้ไขรางวัล');
+        }
+        
+    } catch (error) {
+        console.error('Error editing prize:', error);
+        showError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = 'บันทึกการแก้ไข';
+    }
+}
+
+// Delete Prize Function
+async function deletePrize(prizeId, prizeName, drawnCount) {
+    // Show confirmation dialog with details
+    let confirmMessage = `คุณแน่ใจหรือไม่ว่าต้องการลบรางวัล "${prizeName}"?`;
+    
+    if (drawnCount > 0) {
+        confirmMessage += `\n\n⚠️ รางวัลนี้ถูกจับไปแล้ว ${drawnCount} รางวัล\nไม่สามารถลบได้ กรุณาใช้ฟังก์ชัน "ยกเลิกครั้งล่าสุด" หรือ "รีเซ็ตอีเวนต์" ก่อน`;
+        alert(confirmMessage);
+        return;
+    }
+    
+    confirmMessage += '\n\nการกระทำนี้ไม่สามารถยกเลิกได้!';
+    
+    const confirmed = confirm(confirmMessage);
+    if (!confirmed) return;
+    
+    try {
+        const response = await fetch(`/api/event/${eventId}/delete_prize/${prizeId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showSuccess(data.message || 'ลบรางวัลเรียบร้อยแล้ว');
+            loadEventState(); // Refresh the lists
+        } else {
+            showError(data.error || 'เกิดข้อผิดพลาดในการลบรางวัล');
+        }
+        
+    } catch (error) {
+        console.error('Error deleting prize:', error);
+        showError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    }
+}
+
+// Edit Participant Modal Functions
+function openEditParticipantModal(participantId, participantName) {
+    document.getElementById('editParticipantId').value = participantId;
+    document.getElementById('editParticipantName').value = participantName;
+    
+    const modal = document.getElementById('editParticipantModal');
+    modal.classList.remove('hidden');
+}
+
+function closeEditParticipantModal() {
+    const modal = document.getElementById('editParticipantModal');
+    modal.classList.add('hidden');
+    
+    // Clear form
+    document.getElementById('editParticipantForm').reset();
+}
+
+async function saveEditedParticipant() {
+    const participantId = document.getElementById('editParticipantId').value;
+    const name = document.getElementById('editParticipantName').value.trim();
+    
+    if (!name) {
+        showError('กรุณากรอกชื่อผู้เข้าร่วม');
+        return;
+    }
+    
+    const submitButton = document.querySelector('#editParticipantForm button[type="submit"]');
+    submitButton.disabled = true;
+    submitButton.textContent = 'กำลังบันทึก...';
+    
+    try {
+        const response = await fetch(`/api/event/${eventId}/edit_participant/${participantId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                name: name
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showSuccess(data.message || 'แก้ไขผู้เข้าร่วมเรียบร้อยแล้ว');
+            closeEditParticipantModal();
+            loadEventState(); // Refresh the lists
+        } else {
+            showError(data.error || 'เกิดข้อผิดพลาดในการแก้ไขผู้เข้าร่วม');
+        }
+        
+    } catch (error) {
+        console.error('Error editing participant:', error);
+        showError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = 'บันทึกการแก้ไข';
+    }
+}
+
+// Delete Participant Function
+async function deleteParticipant(participantId, participantName) {
+    // Show confirmation dialog
+    const confirmMessage = `คุณแน่ใจหรือไม่ว่าต้องการลบผู้เข้าร่วม "${participantName}"?\n\nการกระทำนี้ไม่สามารถยกเลิกได้!`;
+    
+    const confirmed = confirm(confirmMessage);
+    if (!confirmed) return;
+    
+    try {
+        const response = await fetch(`/api/event/${eventId}/delete_participant/${participantId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showSuccess(data.message || 'ลบผู้เข้าร่วมเรียบร้อยแล้ว');
+            loadEventState(); // Refresh the lists
+        } else {
+            showError(data.error || 'เกิดข้อผิดพลาดในการลบผู้เข้าร่วม');
+        }
+        
+    } catch (error) {
+        console.error('Error deleting participant:', error);
+        showError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    }
+}
+
 // Global functions for template onclick handlers
 window.closeSettingsModal = closeSettingsModal;
 window.closeWinnerModal = closeWinnerModal;
+window.openEditParticipantModal = openEditParticipantModal;
+window.closeEditParticipantModal = closeEditParticipantModal;
+window.deleteParticipant = deleteParticipant;
+window.openEditPrizeModal = openEditPrizeModal;
+window.closeEditPrizeModal = closeEditPrizeModal;
+window.deletePrize = deletePrize;

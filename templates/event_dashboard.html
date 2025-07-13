@@ -111,7 +111,7 @@
                         ⚙️ ตั้งค่า
                     </button>
                     <div class="text-right text-sm text-gray-600">
-                        <p>สร้างเมื่อ: {{ event.created_at.strftime('%d/%m/%Y %H:%M') }}</p>
+                        <p>สร้างเมื่อ: {{ event.thai_created_at }} (เวลาไทย)</p>
                         <p>Event ID: {{ event.id }}</p>
                     </div>
                 </div>
@@ -123,6 +123,74 @@
             <div class="text-center">
                 <div id="randomizingText" class="randomizing-text">🎲</div>
                 <div class="text-white text-xl mt-4">กำลังสุ่ม...</div>
+            </div>
+        </div>
+
+        <!-- Edit Participant Modal -->
+        <div id="editParticipantModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+            <div class="bg-white rounded-lg p-6 max-w-md mx-4 w-full">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">✏️ แก้ไขผู้เข้าร่วม</h2>
+                    <button onclick="closeEditParticipantModal()" class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+                </div>
+                
+                <form id="editParticipantForm" class="space-y-4">
+                    <input type="hidden" id="editParticipantId">
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">ชื่อผู้เข้าร่วม</label>
+                        <input type="text" id="editParticipantName" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="กรอกชื่อ..." required>
+                    </div>
+                    
+                    <div class="flex justify-end space-x-4 pt-4 border-t">
+                        <button type="button" onclick="closeEditParticipantModal()" class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition duration-200">
+                            ยกเลิก
+                        </button>
+                        <button type="submit" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition duration-200">
+                            บันทึกการแก้ไข
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Edit Prize Modal -->
+        <div id="editPrizeModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+            <div class="bg-white rounded-lg p-6 max-w-md mx-4 w-full">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">✏️ แก้ไขรางวัล</h2>
+                    <button onclick="closeEditPrizeModal()" class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+                </div>
+                
+                <form id="editPrizeForm" class="space-y-4">
+                    <input type="hidden" id="editPrizeId">
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">ชื่อรางวัล</label>
+                        <input type="text" id="editPrizeName" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="เช่น iPhone 15, บัตรของขวัญ..." required>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">จำนวนทั้งหมด</label>
+                        <input type="number" id="editPrizeTotalQuantity" class="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed" readonly>
+                        <p class="text-xs text-gray-500 mt-1">คำนวณอัตโนมัติจาก: จำนวนที่แจกไปแล้ว + จำนวนที่เหลือ</p>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">จำนวนที่เหลือ</label>
+                        <input type="number" id="editPrizeRemainingQuantity" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="1" min="0" required>
+                        <p class="text-xs text-gray-500 mt-1">จำนวนที่ยังไม่ได้แจกจ่าย</p>
+                    </div>
+                    
+                    <div class="flex justify-end space-x-4 pt-4 border-t">
+                        <button type="button" onclick="closeEditPrizeModal()" class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition duration-200">
+                            ยกเลิก
+                        </button>
+                        <button type="submit" class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition duration-200">
+                            บันทึกการแก้ไข
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
 
@@ -157,10 +225,10 @@
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-2">เพลงประกอบ</label>
                                 <select id="configMusic" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-                                    <option value="default_upbeat">เพลงกระตุ้นอารมณ์</option>
-                                    <option value="dramatic">เพลงดราม่า</option>
-                                    <option value="festive">เพลงเฟสติวัล</option>
                                     <option value="none">ไม่ใช้เพลง</option>
+                                    <option value="drumroll.mp3">Drum Roll</option>
+                                    <option value="snare_and_drum.mp3">Snare and Drum</option>
+                                    <option value="tada.mp3">Tada</option>
                                 </select>
                             </div>
                         </div>
@@ -263,6 +331,7 @@
         </div>
 
         <!-- Audio Elements -->
+        <audio id="backgroundMusic" loop></audio>
         <audio id="drumRollSound" loop>
             <source src="{{ url_for('static', filename='audio/drumroll.mp3') }}" type="audio/mpeg">
             <source src="{{ url_for('static', filename='audio/drumroll.ogg') }}" type="audio/ogg">
@@ -408,9 +477,14 @@
                 <div class="bg-white rounded-lg shadow-md p-6">
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="text-xl font-semibold text-gray-800">📋 ประวัติการจับรางวัล</h2>
-                        <button id="undoButton" class="bg-orange-600 text-white px-3 py-1 rounded-md hover:bg-orange-700 transition duration-200 text-sm flex items-center gap-1 hidden">
-                            ↶ ยกเลิกครั้งล่าสุด
-                        </button>
+                        <div class="flex items-center gap-2">
+                            <button id="exportButton" class="bg-green-600 text-white px-3 py-1 rounded-md hover:bg-green-700 transition duration-200 text-sm flex items-center gap-1">
+                                📥 Export Excel
+                            </button>
+                            <button id="undoButton" class="bg-orange-600 text-white px-3 py-1 rounded-md hover:bg-orange-700 transition duration-200 text-sm flex items-center gap-1 hidden">
+                                ↶ ยกเลิกครั้งล่าสุด
+                            </button>
+                        </div>
                     </div>
                     <div id="historyList" class="space-y-3 max-h-96 overflow-y-auto">
                         <!-- Will be populated by JavaScript -->
