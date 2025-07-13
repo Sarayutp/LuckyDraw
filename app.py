@@ -1,0 +1,804 @@
+from flask import Flask, request, jsonify, render_template_string, render_template
+from models import db, Event, Participant, Prize, History
+import random
+from datetime import datetime, timedelta
+import os
+import pandas as pd
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+
+# Database configuration
+basedir = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(basedir, "luckydraw.db")}'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'
+app.config['UPLOAD_FOLDER'] = os.path.join(basedir, 'uploads')
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+
+# Create uploads directory if it doesn't exist
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Allowed file extensions
+ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# Initialize database
+db.init_app(app)
+
+@app.route('/')
+def index():
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LuckyDraw System</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            .container { max-width: 600px; margin: 0 auto; text-align: center; }
+            h1 { color: #2A4A7C; }
+            p { color: #666; line-height: 1.6; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🎉 LuckyDraw System v1.6</h1>
+            <p>ระบบจับรางวัลอัจฉริยะ รองรับทั้งโหมดคลาสสิกและแลกเปลี่ยนของขวัญ</p>
+            <p><strong>Phase 1: MVP - Core Logic</strong> พร้อมใช้งาน!</p>
+            <hr>
+            <p>การใช้งาน:</p>
+            <ul style="text-align: left;">
+                <li>GET /event/&lt;event_id&gt; - หน้า Dashboard อีเวนต์</li>
+                <li>POST /api/event/&lt;event_id&gt;/draw - จับรางวัล</li>
+            </ul>
+        </div>
+    </body>
+    </html>
+    ''')
+
+@app.route('/event/<int:event_id>')
+def event_dashboard(event_id):
+    event = Event.query.get_or_404(event_id)
+    return render_template('event_dashboard.html', event=event)
+
+@app.route('/event/<int:event_id>/winners')
+def winner_showcase(event_id):
+    event = Event.query.get_or_404(event_id)
+    return render_template('winner_showcase.html', event=event)
+
+@app.route('/api/event/<int:event_id>/draw', methods=['POST'])
+def draw_lucky(event_id):
+    try:
+        event = Event.query.get_or_404(event_id)
+        
+        if event.event_type == 'classic':
+            return handle_classic_draw(event)
+        elif event.event_type == 'exchange':
+            return handle_exchange_draw(event)
+        else:
+            return jsonify({'error': 'Invalid event type'}), 400
+            
+    except Exception as e:
+        # Only rollback if not in test mode
+        if not event.is_test_mode:
+            db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+def handle_classic_draw(event):
+    from flask import request
+    
+    # Get participants who haven't won yet
+    won_participant_ids = db.session.query(History.receiver_participant_id).filter_by(event_id=event.id).all()
+    won_participant_ids = [pid[0] for pid in won_participant_ids]
+    
+    available_participants = Participant.query.filter(
+        Participant.event_id == event.id,
+        ~Participant.id.in_(won_participant_ids)
+    ).all()
+    
+    if not available_participants:
+        return jsonify({'error': 'No participants available for drawing'}), 400
+    
+    # Check if specific prizes are selected for drawing
+    selected_prizes = None
+    if request.is_json and request.json:
+        selected_prizes = request.json.get('selected_prizes')
+    
+    if selected_prizes:
+        # Get only selected prizes that are available
+        prize_ids = [p['prize_id'] for p in selected_prizes]
+        available_prizes = Prize.query.filter(
+            Prize.event_id == event.id,
+            Prize.id.in_(prize_ids),
+            Prize.remaining_quantity > 0
+        ).all()
+        
+        # Create a weighted list based on selected quantities
+        weighted_prizes = []
+        for prize in available_prizes:
+            # Find the selected quantity for this prize
+            selected_qty = 1  # Default
+            for sp in selected_prizes:
+                if sp['prize_id'] == prize.id:
+                    # Use the selected quantity, but don't exceed remaining quantity
+                    selected_qty = min(sp['quantity'], prize.remaining_quantity)
+                    break
+            
+            # Add the prize multiple times based on selected quantity to increase probability
+            # This creates a weighted selection where prizes with higher quantity have higher chance
+            if selected_qty > 0:
+                weighted_prizes.extend([prize] * selected_qty)
+        
+        if not weighted_prizes:
+            return jsonify({'error': 'No selected prizes available for drawing'}), 400
+    else:
+        # Get all available prizes (original behavior)
+        available_prizes = Prize.query.filter(
+            Prize.event_id == event.id,
+            Prize.remaining_quantity > 0
+        ).all()
+        
+        if not available_prizes:
+            return jsonify({'error': 'No prizes available'}), 400
+        
+        weighted_prizes = available_prizes
+    
+    # Calculate total quantity to draw
+    total_quantity_to_draw = 1  # Default: draw 1 prize
+    
+    if selected_prizes:
+        # Sum up all selected quantities
+        total_quantity_to_draw = sum(min(sp['quantity'], 
+                                       Prize.query.get(sp['prize_id']).remaining_quantity) 
+                                   for sp in selected_prizes 
+                                   if Prize.query.get(sp['prize_id']).remaining_quantity > 0)
+    
+    # Limit to available participants
+    total_quantity_to_draw = min(total_quantity_to_draw, len(available_participants))
+    
+    if total_quantity_to_draw <= 0:
+        return jsonify({'error': 'No prizes available to draw'}), 400
+    
+    # Draw multiple winners if needed
+    winners = []
+    drawn_prizes = []
+    remaining_participants = available_participants.copy()
+    remaining_weighted_prizes = weighted_prizes.copy()
+    
+    for i in range(total_quantity_to_draw):
+        if not remaining_participants or not remaining_weighted_prizes:
+            break
+            
+        # Random selection
+        winner = random.choice(remaining_participants)
+        prize = random.choice(remaining_weighted_prizes)
+        
+        winners.append(winner)
+        drawn_prizes.append(prize)
+        
+        # Remove winner from remaining participants
+        remaining_participants.remove(winner)
+        
+        # Remove one instance of the prize from weighted list
+        remaining_weighted_prizes.remove(prize)
+        
+        # If not in test mode, update database immediately
+        if not event.is_test_mode:
+            # Update prize quantity
+            prize.remaining_quantity -= 1
+            
+            # Create history record
+            history_record = History(
+                event_id=event.id,
+                receiver_participant_id=winner.id,
+                prize_id=prize.id,
+                drawn_at=datetime.utcnow()
+            )
+            db.session.add(history_record)
+    
+    # Commit all changes at once (only in real mode)
+    if not event.is_test_mode:
+        db.session.commit()
+    
+    # Create response data
+    if len(winners) == 1:
+        # Single winner response (backward compatibility)
+        response_data = {
+            'success': True,
+            'winner_name': winners[0].name,
+            'prize_name': drawn_prizes[0].name,
+            'draw_type': 'classic',
+            'is_test_mode': event.is_test_mode
+        }
+    else:
+        # Multiple winners response
+        response_data = {
+            'success': True,
+            'multiple_winners': True,
+            'results': [
+                {
+                    'winner_name': winner.name,
+                    'prize_name': prize.name
+                }
+                for winner, prize in zip(winners, drawn_prizes)
+            ],
+            'draw_type': 'classic',
+            'is_test_mode': event.is_test_mode,
+            'total_drawn': len(winners)
+        }
+    
+    return jsonify(response_data)
+
+def handle_exchange_draw(event):
+    # Get all history for this event to determine current giver
+    history_records = History.query.filter_by(event_id=event.id).order_by(History.drawn_at).all()
+    
+    if not history_records:
+        # First draw - first participant is the giver
+        first_participant = Participant.query.filter_by(event_id=event.id).first()
+        if not first_participant:
+            return jsonify({'error': 'No participants in this event'}), 400
+        current_giver = first_participant
+    else:
+        # Subsequent draws - previous receiver becomes the giver
+        last_record = history_records[-1]
+        current_giver = Participant.query.get(last_record.receiver_participant_id)
+    
+    # Get participants who haven't received yet (excluding current giver)
+    received_participant_ids = [record.receiver_participant_id for record in history_records]
+    
+    available_receivers = Participant.query.filter(
+        Participant.event_id == event.id,
+        ~Participant.id.in_(received_participant_ids)
+    ).all()
+    
+    if not available_receivers:
+        return jsonify({'error': 'No participants available to receive'}), 400
+    
+    # Random selection of receiver
+    receiver = random.choice(available_receivers)
+    
+    # Create response data
+    response_data = {
+        'success': True,
+        'giver_name': current_giver.name,
+        'receiver_name': receiver.name,
+        'draw_type': 'exchange',
+        'is_test_mode': event.is_test_mode
+    }
+    
+    # If in test mode, return the result without committing to database
+    if event.is_test_mode:
+        return jsonify(response_data)
+    
+    # Create history record (only in real mode)
+    history_record = History(
+        event_id=event.id,
+        giver_participant_id=current_giver.id,
+        receiver_participant_id=receiver.id,
+        drawn_at=datetime.utcnow()
+    )
+    
+    db.session.add(history_record)
+    db.session.commit()
+    
+    return jsonify(response_data)
+
+@app.route('/api/event/<int:event_id>/state', methods=['GET'])
+def get_event_state(event_id):
+    event = Event.query.get_or_404(event_id)
+    
+    # Get participants who haven't won yet
+    won_participant_ids = db.session.query(History.receiver_participant_id).filter_by(event_id=event.id).all()
+    won_participant_ids = [pid[0] for pid in won_participant_ids]
+    
+    remaining_participants = Participant.query.filter(
+        Participant.event_id == event.id,
+        ~Participant.id.in_(won_participant_ids)
+    ).all()
+    
+    # Get remaining prizes
+    remaining_prizes = Prize.query.filter(
+        Prize.event_id == event.id,
+        Prize.remaining_quantity > 0
+    ).all()
+    
+    # Get history
+    history_records = History.query.filter_by(event_id=event.id).order_by(History.drawn_at.desc()).all()
+    
+    history_data = []
+    for record in history_records:
+        history_item = {
+            'id': record.id,
+            'receiver_name': record.receiver.name,
+            'drawn_at': record.drawn_at.strftime('%d/%m/%Y %H:%M:%S')
+        }
+        
+        if event.event_type == 'classic' and record.prize:
+            history_item['prize_name'] = record.prize.name
+        elif event.event_type == 'exchange' and record.giver:
+            history_item['giver_name'] = record.giver.name
+            
+        history_data.append(history_item)
+    
+    return jsonify({
+        'event_type': event.event_type,
+        'remaining_participants': [{'id': p.id, 'name': p.name} for p in remaining_participants],
+        'remaining_prizes': [{'id': p.id, 'name': p.name, 'remaining_quantity': p.remaining_quantity} for p in remaining_prizes],
+        'history': history_data,
+        'is_test_mode': event.is_test_mode,
+        'config': {
+            'delay_ms': event.config_delay_ms,
+            'draw_text': event.config_draw_text,
+            'music_id': event.config_music_id,
+            'random_animation': event.config_random_animation,
+            'winner_animation': event.config_winner_animation,
+            'background_url': event.config_background_url,
+            'logo_url': event.config_logo_url
+        }
+    })
+
+@app.route('/api/event/<int:event_id>/add_participant', methods=['POST'])
+def add_participant(event_id):
+    event = Event.query.get_or_404(event_id)
+    data = request.get_json()
+    
+    if not data or 'name' not in data:
+        return jsonify({'error': 'Name is required'}), 400
+    
+    participant = Participant(
+        name=data['name'].strip(),
+        event_id=event.id
+    )
+    
+    db.session.add(participant)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'participant': {'id': participant.id, 'name': participant.name}
+    })
+
+@app.route('/api/event/<int:event_id>/add_prize', methods=['POST'])
+def add_prize(event_id):
+    event = Event.query.get_or_404(event_id)
+    
+    if event.event_type != 'classic':
+        return jsonify({'error': 'Prizes only available for classic events'}), 400
+    
+    data = request.get_json()
+    
+    if not data or 'name' not in data or 'quantity' not in data:
+        return jsonify({'error': 'Name and quantity are required'}), 400
+    
+    try:
+        quantity = int(data['quantity'])
+        if quantity <= 0:
+            return jsonify({'error': 'Quantity must be positive'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid quantity'}), 400
+    
+    prize = Prize(
+        name=data['name'].strip(),
+        total_quantity=quantity,
+        remaining_quantity=quantity,
+        event_id=event.id
+    )
+    
+    db.session.add(prize)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'prize': {
+            'id': prize.id, 
+            'name': prize.name, 
+            'total_quantity': prize.total_quantity,
+            'remaining_quantity': prize.remaining_quantity
+        }
+    })
+
+@app.route('/api/event/<int:event_id>/reset', methods=['POST'])
+def reset_event(event_id):
+    event = Event.query.get_or_404(event_id)
+    
+    try:
+        # Delete all history records for this event
+        History.query.filter_by(event_id=event.id).delete()
+        
+        # Reset all prize quantities to their original total
+        prizes = Prize.query.filter_by(event_id=event.id).all()
+        for prize in prizes:
+            prize.remaining_quantity = prize.total_quantity
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Event reset successfully'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/event/<int:event_id>/settings', methods=['POST'])
+def update_event_settings(event_id):
+    event = Event.query.get_or_404(event_id)
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    try:
+        # Update configuration fields
+        if 'delay' in data:
+            try:
+                delay_seconds = float(data['delay'])
+                if 1 <= delay_seconds <= 10:
+                    event.config_delay_ms = int(delay_seconds * 1000)
+                else:
+                    return jsonify({'error': 'Delay must be between 1-10 seconds'}), 400
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Invalid delay value'}), 400
+        
+        if 'draw_text' in data and data['draw_text'].strip():
+            event.config_draw_text = data['draw_text'].strip()
+        
+        if 'music' in data:
+            valid_music = ['default_upbeat', 'dramatic', 'festive', 'none']
+            if data['music'] in valid_music:
+                event.config_music_id = data['music']
+            else:
+                return jsonify({'error': 'Invalid music option'}), 400
+        
+        if 'random_animation' in data:
+            valid_animations = ['scrolling_names', 'spinning_wheel', 'bouncing_icons', 'matrix_rain']
+            if data['random_animation'] in valid_animations:
+                event.config_random_animation = data['random_animation']
+            else:
+                return jsonify({'error': 'Invalid random animation option'}), 400
+        
+        if 'winner_animation' in data:
+            valid_winner_animations = ['confetti', 'fireworks', 'balloons', 'sparkles']
+            if data['winner_animation'] in valid_winner_animations:
+                event.config_winner_animation = data['winner_animation']
+            else:
+                return jsonify({'error': 'Invalid winner animation option'}), 400
+        
+        if 'background_url' in data:
+            # Allow empty string to remove background
+            event.config_background_url = data['background_url'].strip() if data['background_url'] else None
+        
+        if 'logo_url' in data:
+            # Allow empty string to remove logo
+            event.config_logo_url = data['logo_url'].strip() if data['logo_url'] else None
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Settings updated successfully',
+            'config': {
+                'delay_ms': event.config_delay_ms,
+                'draw_text': event.config_draw_text,
+                'music_id': event.config_music_id,
+                'random_animation': event.config_random_animation,
+                'winner_animation': event.config_winner_animation,
+                'background_url': event.config_background_url,
+                'logo_url': event.config_logo_url
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/event/<int:event_id>/toggle_test_mode', methods=['POST'])
+def toggle_test_mode(event_id):
+    event = Event.query.get_or_404(event_id)
+    
+    try:
+        # Toggle the test mode
+        event.is_test_mode = not event.is_test_mode
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'is_test_mode': event.is_test_mode,
+            'message': f'Test mode {"enabled" if event.is_test_mode else "disabled"}'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/event/<int:event_id>/undo_draw', methods=['POST'])
+def undo_last_draw(event_id):
+    event = Event.query.get_or_404(event_id)
+    
+    try:
+        # Find the most recent draw time
+        latest_record = History.query.filter_by(event_id=event.id).order_by(History.drawn_at.desc()).first()
+        
+        if not latest_record:
+            return jsonify({'error': 'No draw history found to undo'}), 400
+        
+        latest_draw_time = latest_record.drawn_at
+        
+        # Find all records from the same draw session (within 1 second of each other)
+        # This handles multiple winners from the same draw
+        records_to_undo = History.query.filter(
+            History.event_id == event.id,
+            History.drawn_at >= latest_draw_time - timedelta(seconds=1),
+            History.drawn_at <= latest_draw_time + timedelta(seconds=1)
+        ).order_by(History.drawn_at.desc()).all()
+        
+        if not records_to_undo:
+            return jsonify({'error': 'No draw history found to undo'}), 400
+        
+        undone_records = []
+        
+        # Process each record
+        for record in records_to_undo:
+            # If it's a classic event with a prize, restore the prize quantity
+            if event.event_type == 'classic' and record.prize_id:
+                prize = Prize.query.get(record.prize_id)
+                if prize:
+                    prize.remaining_quantity += 1
+            
+            # Collect record info for response
+            undone_records.append({
+                'receiver_name': record.receiver.name,
+                'giver_name': record.giver.name if record.giver else None,
+                'prize_name': record.prize.name if record.prize else None,
+                'drawn_at': record.drawn_at.strftime('%d/%m/%Y %H:%M:%S')
+            })
+            
+            # Delete the history record
+            db.session.delete(record)
+        
+        db.session.commit()
+        
+        # Create appropriate response message
+        if len(undone_records) == 1:
+            message = 'Last draw has been undone successfully'
+            response_data = {
+                'success': True,
+                'message': message,
+                'undone_record': undone_records[0]
+            }
+        else:
+            message = f'Last draw with {len(undone_records)} winners has been undone successfully'
+            response_data = {
+                'success': True,
+                'message': message,
+                'multiple_undone': True,
+                'undone_records': undone_records,
+                'total_undone': len(undone_records)
+            }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/event/<int:event_id>/import_participants', methods=['POST'])
+def import_participants(event_id):
+    event = Event.query.get_or_404(event_id)
+    
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'File type not allowed. Please upload CSV or Excel files only.'}), 400
+    
+    try:
+        # Save uploaded file temporarily
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # Read file based on extension
+        file_extension = filename.rsplit('.', 1)[1].lower()
+        
+        if file_extension == 'csv':
+            df = pd.read_csv(filepath)
+        else:  # xlsx or xls
+            df = pd.read_excel(filepath)
+        
+        # Validate required columns
+        if 'name' not in df.columns and 'Name' not in df.columns and 'ชื่อ' not in df.columns:
+            os.remove(filepath)  # Clean up temp file
+            return jsonify({'error': 'File must contain a column named "name", "Name", or "ชื่อ"'}), 400
+        
+        # Normalize column name
+        name_column = None
+        for col in ['name', 'Name', 'ชื่อ']:
+            if col in df.columns:
+                name_column = col
+                break
+        
+        # Process participants
+        added_count = 0
+        skipped_count = 0
+        errors = []
+        
+        for index, row in df.iterrows():
+            participant_name = str(row[name_column]).strip()
+            
+            # Skip empty names
+            if not participant_name or participant_name.lower() in ['nan', 'none', '']:
+                skipped_count += 1
+                continue
+            
+            # Check if participant already exists
+            existing = Participant.query.filter_by(event_id=event.id, name=participant_name).first()
+            if existing:
+                skipped_count += 1
+                continue
+            
+            try:
+                participant = Participant(
+                    name=participant_name,
+                    event_id=event.id
+                )
+                db.session.add(participant)
+                added_count += 1
+            except Exception as e:
+                errors.append(f"Row {index + 2}: {str(e)}")
+        
+        # Commit all participants
+        db.session.commit()
+        
+        # Clean up temp file
+        os.remove(filepath)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Import completed: {added_count} participants added, {skipped_count} skipped',
+            'details': {
+                'added': added_count,
+                'skipped': skipped_count,
+                'errors': errors
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        # Clean up temp file if it exists
+        if 'filepath' in locals() and os.path.exists(filepath):
+            os.remove(filepath)
+        return jsonify({'error': f'File processing error: {str(e)}'}), 500
+
+@app.route('/api/event/<int:event_id>/import_prizes', methods=['POST'])
+def import_prizes(event_id):
+    event = Event.query.get_or_404(event_id)
+    
+    if event.event_type != 'classic':
+        return jsonify({'error': 'Prizes can only be imported for classic events'}), 400
+    
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'File type not allowed. Please upload CSV or Excel files only.'}), 400
+    
+    try:
+        # Save uploaded file temporarily
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # Read file based on extension
+        file_extension = filename.rsplit('.', 1)[1].lower()
+        
+        if file_extension == 'csv':
+            df = pd.read_csv(filepath)
+        else:  # xlsx or xls
+            df = pd.read_excel(filepath)
+        
+        # Validate required columns
+        name_col = None
+        quantity_col = None
+        
+        # Check for name column
+        for col in ['name', 'Name', 'ชื่อ', 'prize_name', 'Prize Name', 'ชื่อรางวัล']:
+            if col in df.columns:
+                name_col = col
+                break
+        
+        # Check for quantity column
+        for col in ['quantity', 'Quantity', 'จำนวน', 'total_quantity', 'Total Quantity']:
+            if col in df.columns:
+                quantity_col = col
+                break
+        
+        if not name_col:
+            os.remove(filepath)
+            return jsonify({'error': 'File must contain a prize name column (name/Name/ชื่อ/prize_name/Prize Name/ชื่อรางวัล)'}), 400
+        
+        if not quantity_col:
+            os.remove(filepath)
+            return jsonify({'error': 'File must contain a quantity column (quantity/Quantity/จำนวน/total_quantity/Total Quantity)'}), 400
+        
+        # Process prizes
+        added_count = 0
+        skipped_count = 0
+        errors = []
+        
+        for index, row in df.iterrows():
+            prize_name = str(row[name_col]).strip()
+            
+            # Skip empty names
+            if not prize_name or prize_name.lower() in ['nan', 'none', '']:
+                skipped_count += 1
+                continue
+            
+            try:
+                quantity = int(float(row[quantity_col]))
+                if quantity <= 0:
+                    errors.append(f"Row {index + 2}: Quantity must be positive")
+                    continue
+            except (ValueError, TypeError):
+                errors.append(f"Row {index + 2}: Invalid quantity value")
+                continue
+            
+            # Check if prize already exists
+            existing = Prize.query.filter_by(event_id=event.id, name=prize_name).first()
+            if existing:
+                skipped_count += 1
+                continue
+            
+            try:
+                prize = Prize(
+                    name=prize_name,
+                    total_quantity=quantity,
+                    remaining_quantity=quantity,
+                    event_id=event.id
+                )
+                db.session.add(prize)
+                added_count += 1
+            except Exception as e:
+                errors.append(f"Row {index + 2}: {str(e)}")
+        
+        # Commit all prizes
+        db.session.commit()
+        
+        # Clean up temp file
+        os.remove(filepath)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Import completed: {added_count} prizes added, {skipped_count} skipped',
+            'details': {
+                'added': added_count,
+                'skipped': skipped_count,
+                'errors': errors
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        # Clean up temp file if it exists
+        if 'filepath' in locals() and os.path.exists(filepath):
+            os.remove(filepath)
+        return jsonify({'error': f'File processing error: {str(e)}'}), 500
+
+# Initialize database tables
+with app.app_context():
+    db.create_all()
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5001)

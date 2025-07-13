@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ event.name }} - Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+    <style>
+        .winner-announcement {
+            background: linear-gradient(45deg, #FFD700, #FFA500);
+            border: 3px solid #FF6B6B;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        .confetti {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #FFD700;
+            animation: confetti-fall 3s linear infinite;
+        }
+        @keyframes confetti-fall {
+            0% { transform: translateY(-100vh) rotate(0deg); }
+            100% { transform: translateY(100vh) rotate(360deg); }
+        }
+        .randomization-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 60;
+        }
+        .randomizing-text {
+            font-size: 4rem;
+            color: white;
+            font-weight: bold;
+            animation: randomize 0.1s infinite;
+        }
+        @keyframes randomize {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .sparkle-title {
+            animation: sparkle 2s infinite;
+        }
+        @keyframes sparkle {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.02); }
+        }
+        .winner-card-modal {
+            opacity: 0;
+            transform: scale(0.9);
+            transition: all 0.5s ease-out;
+        }
+        .winner-card-modal.animate-in {
+            opacity: 1;
+            transform: scale(1);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Test Mode Banner -->
+    {% if event.is_test_mode %}
+    <div class="bg-yellow-400 text-black text-center py-3 px-4 font-bold text-lg">
+        🧪 โหมดทดสอบทำงานอยู่ | TEST MODE IS ACTIVE
+    </div>
+    {% endif %}
+
+    <div class="container mx-auto px-4 py-6">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center gap-4">
+                    <img id="eventLogo" src="" alt="Event Logo" class="w-16 h-16 object-contain hidden">
+                    <div>
+                        <h1 class="text-3xl font-bold text-gray-800">{{ event.name }}</h1>
+                        <div class="flex items-center gap-4 mt-2">
+                            <span class="px-3 py-1 text-sm rounded-full {% if event.event_type == 'classic' %}bg-blue-100 text-blue-800{% else %}bg-purple-100 text-purple-800{% endif %}">
+                                {% if event.event_type == 'classic' %}จับรางวัลคลาสสิก{% else %}แลกเปลี่ยนของขวัญ{% endif %}
+                            </span>
+                            {% if event.is_test_mode %}
+                            <span class="px-3 py-1 text-sm rounded-full bg-yellow-100 text-yellow-800">
+                                โหมดทดสอบ
+                            </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <!-- Test Mode Toggle -->
+                    <div class="flex items-center gap-2">
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="testModeToggle" class="sr-only peer" {% if event.is_test_mode %}checked{% endif %}>
+                            <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-yellow-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-yellow-500"></div>
+                            <span class="ml-2 text-sm font-medium text-gray-700">โหมดทดสอบ</span>
+                        </label>
+                    </div>
+                    
+                    <button id="settingsButton" class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition duration-200 flex items-center gap-2">
+                        ⚙️ ตั้งค่า
+                    </button>
+                    <div class="text-right text-sm text-gray-600">
+                        <p>สร้างเมื่อ: {{ event.created_at.strftime('%d/%m/%Y %H:%M') }}</p>
+                        <p>Event ID: {{ event.id }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Randomization Overlay -->
+        <div id="randomizationOverlay" class="randomization-overlay hidden">
+            <div class="text-center">
+                <div id="randomizingText" class="randomizing-text">🎲</div>
+                <div class="text-white text-xl mt-4">กำลังสุ่ม...</div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settingsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+            <div class="bg-white rounded-lg p-6 max-w-2xl mx-4 w-full max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">⚙️ ตั้งค่าอีเวนต์</h2>
+                    <button onclick="closeSettingsModal()" class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+                </div>
+                
+                <form id="settingsForm" class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- Basic Settings -->
+                        <div class="space-y-4">
+                            <h3 class="text-lg font-semibold text-gray-700 border-b pb-2">การตั้งค่าพื้นฐาน</h3>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">ความหน่วงเวลา (วินาที)</label>
+                                <input type="number" id="configDelay" min="1" max="10" step="0.5" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                <p class="text-xs text-gray-500 mt-1">เวลาที่ใช้ในการสุ่มก่อนแสดงผล</p>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">ข้อความบนปุ่มจับรางวัล</label>
+                                <input type="text" id="configDrawText" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                       placeholder="จับรางวัล">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">เพลงประกอบ</label>
+                                <select id="configMusic" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                    <option value="default_upbeat">เพลงกระตุ้นอารมณ์</option>
+                                    <option value="dramatic">เพลงดราม่า</option>
+                                    <option value="festive">เพลงเฟสติวัล</option>
+                                    <option value="none">ไม่ใช้เพลง</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <!-- Animation Settings -->
+                        <div class="space-y-4">
+                            <h3 class="text-lg font-semibold text-gray-700 border-b pb-2">การตั้งค่าอนิเมชัน</h3>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">อนิเมชันระหว่างสุ่ม</label>
+                                <select id="configRandomAnimation" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                    <option value="scrolling_names">ชื่อวิ่งผ่าน</option>
+                                    <option value="spinning_wheel">วงล้อหมุน</option>
+                                    <option value="bouncing_icons">ไอคอนกระเด้ง</option>
+                                    <option value="matrix_rain">ฝนตัวเลข</option>
+                                </select>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">อนิเมชันผู้ชนะ</label>
+                                <select id="configWinnerAnimation" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                    <option value="confetti">ดาวตก (Confetti)</option>
+                                    <option value="fireworks">ดอกไม้ไฟ</option>
+                                    <option value="balloons">ลูกโป่ง</option>
+                                    <option value="sparkles">ประกายไฟ</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Visual Customization -->
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-semibold text-gray-700 border-b pb-2">การปรับแต่งหน้าตา</h3>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">URL รูปพื้นหลัง</label>
+                                <input type="url" id="configBackgroundUrl" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                       placeholder="https://example.com/background.jpg">
+                                <p class="text-xs text-gray-500 mt-1">ใส่ URL รูปภาพสำหรับพื้นหลัง</p>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">URL โลโก้</label>
+                                <input type="url" id="configLogoUrl" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                       placeholder="https://example.com/logo.png">
+                                <p class="text-xs text-gray-500 mt-1">ใส่ URL รูปภาพสำหรับโลโก้</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Action Buttons -->
+                    <div class="flex justify-end space-x-4 pt-4 border-t">
+                        <button type="button" onclick="closeSettingsModal()" 
+                                class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition duration-200">
+                            ยกเลิก
+                        </button>
+                        <button type="submit" 
+                                class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition duration-200">
+                            บันทึกการตั้งค่า
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Winner Announcement Modal -->
+        <div id="winnerModal" class="fixed inset-0 z-50 hidden" style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 50%, #1e293b 100%);">
+            <div class="w-full h-full flex flex-col items-center justify-center px-4 py-8 relative">
+                <!-- Close Button -->
+                <button onclick="closeWinnerModal()" 
+                        class="absolute top-6 right-6 bg-slate-700 hover:bg-slate-600 text-white rounded-full w-12 h-12 flex items-center justify-center text-xl font-bold transition duration-200 z-10">
+                    ×
+                </button>
+                
+                <!-- Header -->
+                <div class="text-center mb-8">
+                    <h2 id="winnerTitle" class="text-4xl md:text-6xl font-bold text-yellow-300 mb-4 sparkle-title" style="text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">
+                        🎉 ยินดีกับผู้โชคดี! 🎉
+                    </h2>
+                    <p class="text-xl text-slate-300 font-medium">{{ event.name }}</p>
+                </div>
+
+                <!-- Winner Content -->
+                <div id="winnerContent" class="w-full max-w-6xl mx-auto">
+                    <!-- Winner details will be inserted here -->
+                </div>
+                
+                <!-- Footer -->
+                <div class="text-center mt-8">
+                    <p class="text-slate-400 mb-4 text-lg">📞 กรุณาติดต่อเจ้าหน้าที่เพื่อรับรางวัล</p>
+                    <button onclick="closeWinnerModal()" 
+                            class="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-3 px-8 rounded-lg transition duration-300 transform hover:scale-105">
+                        ← กลับไปยัง Dashboard
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audio Elements -->
+        <audio id="drumRollSound" loop>
+            <source src="{{ url_for('static', filename='audio/drumroll.mp3') }}" type="audio/mpeg">
+            <source src="{{ url_for('static', filename='audio/drumroll.ogg') }}" type="audio/ogg">
+        </audio>
+        <audio id="tadaSound">
+            <source src="{{ url_for('static', filename='audio/tada.mp3') }}" type="audio/mpeg">
+            <source src="{{ url_for('static', filename='audio/tada.ogg') }}" type="audio/ogg">
+        </audio>
+
+        <!-- Main Content -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Left Column: Controls -->
+            <div class="space-y-6">
+                <!-- Add Participant -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <h2 class="text-xl font-semibold text-gray-800 mb-4">➕ เพิ่มผู้เข้าร่วม</h2>
+                    
+                    <!-- Manual Add Form -->
+                    <form id="addParticipantForm" class="space-y-4 mb-6">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">ชื่อผู้เข้าร่วม</label>
+                            <input type="text" id="participantName" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="กรอกชื่อ..." required>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-200">
+                            เพิ่มผู้เข้าร่วม
+                        </button>
+                    </form>
+                    
+                    <!-- File Upload -->
+                    <div class="border-t pt-6">
+                        <h3 class="text-lg font-medium text-gray-800 mb-3">📁 อัปโหลดไฟล์</h3>
+                        <form id="uploadParticipantsForm" enctype="multipart/form-data" class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">เลือกไฟล์ CSV หรือ Excel</label>
+                                <input type="file" id="participantsFile" name="file" accept=".csv,.xlsx,.xls" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                <p class="text-xs text-gray-500 mt-1">ไฟล์ต้องมีคอลัมน์ "name", "Name" หรือ "ชื่อ"</p>
+                            </div>
+                            <button type="submit" class="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition duration-200">
+                                📤 อัปโหลดผู้เข้าร่วม
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Add Prize (Hidden for exchange mode) -->
+                {% if event.event_type == 'classic' %}
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <h2 class="text-xl font-semibold text-gray-800 mb-4">🎁 เพิ่มรางวัล</h2>
+                    
+                    <!-- Manual Add Form -->
+                    <form id="addPrizeForm" class="space-y-4 mb-6">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">ชื่อรางวัล</label>
+                            <input type="text" id="prizeName" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="เช่น iPhone 15, บัตรของขวัญ..." required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">จำนวน</label>
+                            <input type="number" id="prizeQuantity" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="1" min="1" required>
+                        </div>
+                        <button type="submit" class="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition duration-200">
+                            เพิ่มรางวัล
+                        </button>
+                    </form>
+                    
+                    <!-- File Upload -->
+                    <div class="border-t pt-6">
+                        <h3 class="text-lg font-medium text-gray-800 mb-3">📁 อัปโหลดไฟล์</h3>
+                        <form id="uploadPrizesForm" enctype="multipart/form-data" class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">เลือกไฟล์ CSV หรือ Excel</label>
+                                <input type="file" id="prizesFile" name="file" accept=".csv,.xlsx,.xls" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                                <p class="text-xs text-gray-500 mt-1">ไฟล์ต้องมีคอลัมน์ "name" และ "quantity" (หรือคำแปลภาษาไทย)</p>
+                            </div>
+                            <button type="submit" class="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition duration-200">
+                                📤 อัปโหลดรางวัล
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Prize Selection (Hidden for exchange mode) -->
+                {% if event.event_type == 'classic' %}
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <h2 class="text-xl font-semibold text-gray-800 mb-4">🎯 เลือกรางวัลสำหรับการจับ</h2>
+                    <div class="space-y-3">
+                        <div class="flex items-center space-x-2">
+                            <input type="checkbox" id="selectAllPrizes" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                            <label for="selectAllPrizes" class="text-sm font-medium text-gray-700">เลือกรางวัลทั้งหมด</label>
+                        </div>
+                        <div id="prizeSelectionList" class="space-y-2 max-h-48 overflow-y-auto border rounded-lg p-3 bg-gray-50">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                        <p class="text-xs text-gray-500"><strong>วิธีใช้:</strong> เลือกรางวัลและกำหนดจำนวนที่ต้องการจับ ระบบจะจับผู้ชนะตามจำนวนรวมที่เลือก<br>
+                        <strong>ตัวอย่าง:</strong> เลือก "เครื่องฟอกอากาศ 2 ชิ้น" จะได้ผู้ชนะ 2 คน | หากไม่เลือก จะจับจากรางวัลทั้งหมด (1 คน)</p>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Draw Button -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <button id="drawButton" class="w-full bg-gradient-to-r from-yellow-400 to-orange-500 text-white text-2xl font-bold py-6 px-8 rounded-lg hover:from-yellow-500 hover:to-orange-600 transform hover:scale-105 transition duration-200 shadow-lg">
+                        🎲 {{ event.config_draw_text }}
+                    </button>
+                    <div id="drawStatus" class="mt-4 text-center text-sm text-gray-600"></div>
+                </div>
+
+                <!-- Reset Event -->
+                <div class="bg-white rounded-lg shadow-md p-6 border-l-4 border-red-400">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">🔄 รีเซ็ตอีเวนต์</h3>
+                    <p class="text-sm text-gray-600 mb-4">ลบประวัติการจับรางวัลทั้งหมดและรีเซ็ตจำนวนรางวัลกลับสู่สถานะเริ่มต้น</p>
+                    <button id="resetButton" class="w-full bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 transition duration-200 font-semibold">
+                        🗑️ รีเซ็ตอีเวนต์
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Column: Display -->
+            <div class="space-y-6">
+                <!-- Remaining Participants -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <h2 class="text-xl font-semibold text-gray-800 mb-4">👥 ผู้เข้าร่วมที่เหลือ</h2>
+                    <div id="participantsList" class="space-y-2 max-h-64 overflow-y-auto">
+                        <!-- Will be populated by JavaScript -->
+                    </div>
+                    <div id="participantsCount" class="mt-4 text-sm text-gray-600 font-medium"></div>
+                </div>
+
+                <!-- Remaining Prizes (Hidden for exchange mode) -->
+                {% if event.event_type == 'classic' %}
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <h2 class="text-xl font-semibold text-gray-800 mb-4">🎁 รางวัลที่เหลือ</h2>
+                    <div id="prizesList" class="space-y-2 max-h-64 overflow-y-auto">
+                        <!-- Will be populated by JavaScript -->
+                    </div>
+                    <div id="prizesCount" class="mt-4 text-sm text-gray-600 font-medium"></div>
+                </div>
+                {% endif %}
+
+                <!-- History -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-semibold text-gray-800">📋 ประวัติการจับรางวัล</h2>
+                        <button id="undoButton" class="bg-orange-600 text-white px-3 py-1 rounded-md hover:bg-orange-700 transition duration-200 text-sm flex items-center gap-1 hidden">
+                            ↶ ยกเลิกครั้งล่าสุด
+                        </button>
+                    </div>
+                    <div id="historyList" class="space-y-3 max-h-96 overflow-y-auto">
+                        <!-- Will be populated by JavaScript -->
+                    </div>
+                    <div id="historyCount" class="mt-4 text-sm text-gray-600 font-medium"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <script>
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            window.eventId = {{ event.id }};
+            window.eventType = '{{ event.event_type }}';
+            initializeDashboard();
+        });
+    </script>
+</body>
+</html>

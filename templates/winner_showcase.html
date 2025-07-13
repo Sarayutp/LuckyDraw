@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ผู้ชนะทั้งหมด - LuckyDraw System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .winner-card {
+            opacity: 0;
+            transform: scale(0.9);
+            transition: all 0.5s ease-out;
+        }
+        .winner-card.animate-in {
+            opacity: 1;
+            transform: scale(1);
+        }
+        .sparkle {
+            animation: sparkle 2s infinite;
+        }
+        @keyframes sparkle {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
+        }
+        .bg-gradient-celebration {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 50%, #1e293b 100%);
+        }
+    </style>
+</head>
+<body class="bg-gradient-celebration min-h-screen flex flex-col">
+    <!-- Main Container -->
+    <div class="flex-1 flex flex-col items-center justify-center px-4 py-8">
+        
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-5xl md:text-6xl lg:text-7xl font-bold text-yellow-300 mb-4 sparkle" style="text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">
+                🎉 ยินดีกับผู้โชคดี! 🎉
+            </h1>
+            <p class="text-xl md:text-2xl text-slate-300 font-medium">
+                {{ event.name }}
+            </p>
+        </div>
+
+        <!-- Winners Grid -->
+        <div class="w-full max-w-7xl mx-auto">
+            <div id="winnersGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
+                <!-- Winner cards will be populated by JavaScript -->
+            </div>
+        </div>
+
+        <!-- Empty State (if no winners) -->
+        <div id="noWinners" class="hidden text-center">
+            <div class="text-6xl mb-4">🎲</div>
+            <h2 class="text-3xl font-bold text-slate-300 mb-2">ยังไม่มีผู้ชนะ</h2>
+            <p class="text-slate-400">เริ่มจับรางวัลเพื่อดูผู้โชคดี</p>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="text-center py-8 px-4">
+        <p class="text-slate-400 mb-4 text-lg">
+            📞 กรุณาติดต่อเจ้าหน้าที่เพื่อรับรางวัล
+        </p>
+        <button onclick="goBackToDashboard()" 
+                class="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-3 px-8 rounded-lg transition duration-300 transform hover:scale-105">
+            ← กลับไปยัง Dashboard
+        </button>
+    </div>
+
+    <script>
+        // Global variables
+        let eventId = {{ event.id }};
+        let winners = [];
+
+        /**
+         * Initialize the winner showcase page
+         */
+        async function initializeShowcase() {
+            console.log('Initializing Winner Showcase...');
+            
+            // Load winners data
+            await loadWinners();
+            
+            // Render winners
+            renderWinners();
+            
+            // Start confetti celebration
+            setTimeout(() => {
+                triggerCelebrationConfetti();
+            }, 1000);
+        }
+
+        /**
+         * Load winners from the API
+         */
+        async function loadWinners() {
+            try {
+                const response = await fetch(`/api/event/${eventId}/state`);
+                const data = await response.json();
+                
+                // Extract winners from history
+                winners = data.history.map((record, index) => ({
+                    id: record.id,
+                    name: record.receiver_name,
+                    prize: record.prize_name || 'รางวัลพิเศษ',
+                    position: index + 1,
+                    drawnAt: record.drawn_at
+                }));
+                
+                console.log('Loaded winners:', winners);
+            } catch (error) {
+                console.error('Error loading winners:', error);
+            }
+        }
+
+        /**
+         * Render winners in the grid
+         */
+        function renderWinners() {
+            const winnersGrid = document.getElementById('winnersGrid');
+            const noWinnersDiv = document.getElementById('noWinners');
+            
+            if (winners.length === 0) {
+                winnersGrid.classList.add('hidden');
+                noWinnersDiv.classList.remove('hidden');
+                return;
+            }
+            
+            winnersGrid.classList.remove('hidden');
+            noWinnersDiv.classList.add('hidden');
+            
+            // Clear existing content
+            winnersGrid.innerHTML = '';
+            
+            // Create winner cards
+            winners.forEach((winner, index) => {
+                const card = createWinnerCard(winner, index);
+                winnersGrid.appendChild(card);
+            });
+            
+            // Animate cards in sequence
+            animateCardsIn();
+        }
+
+        /**
+         * Create a winner card element
+         */
+        function createWinnerCard(winner, index) {
+            const card = document.createElement('div');
+            card.className = 'winner-card bg-slate-800 rounded-lg shadow-lg border-2 border-yellow-400 p-6 text-center transform hover:scale-105 transition-transform duration-300';
+            
+            card.innerHTML = `
+                <!-- Winner Number -->
+                <div class="text-sm font-semibold text-slate-400 mb-2">
+                    WINNER #${winner.position}
+                </div>
+                
+                <!-- Winner Name -->
+                <div class="text-2xl md:text-3xl font-bold text-white mb-4 break-words">
+                    ${escapeHtml(winner.name)}
+                </div>
+                
+                <!-- Trophy Icon -->
+                <div class="flex justify-center mb-3">
+                    <svg class="w-8 h-8 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.616 1.738 5.42a1 1 0 01-.285 1.05A3.989 3.989 0 0115 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.715-5.349L11 6.477V16h2a1 1 0 110 2H7a1 1 0 110-2h2V6.477L6.237 7.582l1.715 5.349a1 1 0 01-.285 1.05A3.989 3.989 0 015 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 01.894-1.788l1.599.799L9 4.323V3a1 1 0 011-1z" clip-rule="evenodd"></path>
+                    </svg>
+                </div>
+                
+                <!-- Prize Name -->
+                <div class="text-sm text-yellow-300 font-medium break-words">
+                    ${escapeHtml(winner.prize)}
+                </div>
+            `;
+            
+            return card;
+        }
+
+        /**
+         * Animate winner cards appearing one by one
+         */
+        function animateCardsIn() {
+            const cards = document.querySelectorAll('.winner-card');
+            
+            cards.forEach((card, index) => {
+                setTimeout(() => {
+                    card.classList.add('animate-in');
+                    
+                    // Add a small bounce effect for each card
+                    setTimeout(() => {
+                        card.style.transform = 'scale(1.05)';
+                        setTimeout(() => {
+                            card.style.transform = 'scale(1)';
+                        }, 100);
+                    }, 300);
+                    
+                }, index * 150); // 150ms stagger between each card
+            });
+        }
+
+        /**
+         * Trigger celebration confetti effect
+         */
+        function triggerCelebrationConfetti() {
+            const duration = 3000;
+            const animationEnd = Date.now() + duration;
+            const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 0 };
+
+            function randomInRange(min, max) {
+                return Math.random() * (max - min) + min;
+            }
+
+            const interval = setInterval(function() {
+                const timeLeft = animationEnd - Date.now();
+
+                if (timeLeft <= 0) {
+                    return clearInterval(interval);
+                }
+
+                const particleCount = 50 * (timeLeft / duration);
+                
+                // Left side
+                confetti(Object.assign({}, defaults, { 
+                    particleCount, 
+                    origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 } 
+                }));
+                
+                // Right side
+                confetti(Object.assign({}, defaults, { 
+                    particleCount, 
+                    origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 } 
+                }));
+            }, 250);
+        }
+
+        /**
+         * Escape HTML to prevent XSS
+         */
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        /**
+         * Go back to dashboard
+         */
+        function goBackToDashboard() {
+            window.location.href = `/event/${eventId}`;
+        }
+
+        /**
+         * Auto-refresh winners every 30 seconds
+         */
+        function startAutoRefresh() {
+            setInterval(async () => {
+                const oldWinnersCount = winners.length;
+                await loadWinners();
+                
+                // Only re-render if winners count changed
+                if (winners.length !== oldWinnersCount) {
+                    renderWinners();
+                    
+                    // Trigger confetti for new winners
+                    if (winners.length > oldWinnersCount) {
+                        setTimeout(() => {
+                            triggerCelebrationConfetti();
+                        }, 500);
+                    }
+                }
+            }, 30000); // 30 seconds
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeShowcase();
+            startAutoRefresh();
+        });
+
+        // Add some keyboard shortcuts
+        document.addEventListener('keydown', function(event) {
+            // Press 'r' to refresh winners
+            if (event.key === 'r' || event.key === 'R') {
+                location.reload();
+            }
+            
+            // Press 'Escape' to go back to dashboard
+            if (event.key === 'Escape') {
+                goBackToDashboard();
+            }
+        });
+    </script>
+</body>
+</html>
