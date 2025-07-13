@@ -50,7 +50,7 @@
 
         <!-- Winners Grid -->
         <div class="w-full max-w-7xl mx-auto">
-            <div id="winnersGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
+            <div id="winnersGrid" class="flex flex-wrap justify-center gap-4 md:gap-6">
                 <!-- Winner cards will be populated by JavaScript -->
             </div>
         </div>
@@ -154,7 +154,7 @@
          */
         function createWinnerCard(winner, index) {
             const card = document.createElement('div');
-            card.className = 'winner-card bg-slate-800 rounded-lg shadow-lg border-2 border-yellow-400 p-6 text-center transform hover:scale-105 transition-transform duration-300';
+            card.className = 'winner-card bg-slate-800 rounded-lg shadow-lg border-2 border-yellow-400 p-4 md:p-6 text-center transform hover:scale-105 transition-transform duration-300 w-56 md:w-64 flex-shrink-0';
             
             card.innerHTML = `
                 <!-- Winner Number -->

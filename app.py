@@ -1,10 +1,12 @@
-from flask import Flask, request, jsonify, render_template_string, render_template
+from flask import Flask, request, jsonify, render_template_string, render_template, send_file
 from models import db, Event, Participant, Prize, History
 import random
 from datetime import datetime, timedelta
 import os
 import pandas as pd
 from werkzeug.utils import secure_filename
+import io
+import pytz
 
 app = Flask(__name__)
 
@@ -27,6 +29,31 @@ def allowed_file(filename):
 
 # Initialize database
 db.init_app(app)
+
+# Thailand timezone
+THAILAND_TZ = pytz.timezone('Asia/Bangkok')
+
+def get_thai_time():
+    """Get current time in Thailand timezone"""
+    return datetime.now(THAILAND_TZ)
+
+def format_thai_datetime(dt):
+    """Format datetime to Thailand timezone string"""
+    if dt.tzinfo is None:
+        # Simple heuristic: if hour is 0-6, likely it's converted from Thailand time
+        # If hour is 7-23, likely it's already Thailand time (since UTC+7)
+        if dt.hour >= 7:
+            # Likely already Thailand time, just format it
+            return dt.strftime('%d/%m/%Y %H:%M:%S')
+        else:
+            # Likely UTC time converted incorrectly, treat as UTC
+            dt = pytz.utc.localize(dt)
+            thai_dt = dt.astimezone(THAILAND_TZ)
+            return thai_dt.strftime('%d/%m/%Y %H:%M:%S')
+    else:
+        # Already timezone aware, convert to Thailand timezone
+        thai_dt = dt.astimezone(THAILAND_TZ)
+        return thai_dt.strftime('%d/%m/%Y %H:%M:%S')
 
 @app.route('/')
 def index():
@@ -61,11 +88,15 @@ def index():
 @app.route('/event/<int:event_id>')
 def event_dashboard(event_id):
     event = Event.query.get_or_404(event_id)
+    # Add a method to format the created_at time in Thailand timezone
+    event.thai_created_at = format_thai_datetime(event.created_at)
     return render_template('event_dashboard.html', event=event)
 
 @app.route('/event/<int:event_id>/winners')
 def winner_showcase(event_id):
     event = Event.query.get_or_404(event_id)
+    # Add a method to format the created_at time in Thailand timezone
+    event.thai_created_at = format_thai_datetime(event.created_at)
     return render_template('winner_showcase.html', event=event)
 
 @app.route('/api/event/<int:event_id>/draw', methods=['POST'])
@@ -194,7 +225,7 @@ def handle_classic_draw(event):
                 event_id=event.id,
                 receiver_participant_id=winner.id,
                 prize_id=prize.id,
-                drawn_at=datetime.utcnow()
+                drawn_at=get_thai_time()
             )
             db.session.add(history_record)
     
@@ -278,7 +309,7 @@ def handle_exchange_draw(event):
         event_id=event.id,
         giver_participant_id=current_giver.id,
         receiver_participant_id=receiver.id,
-        drawn_at=datetime.utcnow()
+        drawn_at=get_thai_time()
     )
     
     db.session.add(history_record)
@@ -313,7 +344,7 @@ def get_event_state(event_id):
         history_item = {
             'id': record.id,
             'receiver_name': record.receiver.name,
-            'drawn_at': record.drawn_at.strftime('%d/%m/%Y %H:%M:%S')
+            'drawn_at': format_thai_datetime(record.drawn_at)
         }
         
         if event.event_type == 'classic' and record.prize:
@@ -361,6 +392,89 @@ def add_participant(event_id):
         'participant': {'id': participant.id, 'name': participant.name}
     })
 
+@app.route('/api/event/<int:event_id>/edit_participant/<int:participant_id>', methods=['POST'])
+def edit_participant(event_id, participant_id):
+    event = Event.query.get_or_404(event_id)
+    
+    participant = Participant.query.filter_by(id=participant_id, event_id=event.id).first()
+    if not participant:
+        return jsonify({'error': 'Participant not found'}), 404
+    
+    data = request.get_json()
+    
+    if not data or 'name' not in data:
+        return jsonify({'error': 'Name is required'}), 400
+    
+    try:
+        new_name = data['name'].strip()
+        
+        if not new_name:
+            return jsonify({'error': 'Participant name cannot be empty'}), 400
+        
+        # Check if another participant with the same name exists in this event
+        existing = Participant.query.filter_by(event_id=event.id, name=new_name).filter(Participant.id != participant.id).first()
+        if existing:
+            return jsonify({'error': 'Another participant with this name already exists'}), 400
+        
+        # Update the participant
+        participant.name = new_name
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Participant updated successfully',
+            'participant': {
+                'id': participant.id,
+                'name': participant.name
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/event/<int:event_id>/delete_participant/<int:participant_id>', methods=['POST'])
+def delete_participant(event_id, participant_id):
+    event = Event.query.get_or_404(event_id)
+    
+    participant = Participant.query.filter_by(id=participant_id, event_id=event.id).first()
+    if not participant:
+        return jsonify({'error': 'Participant not found'}), 404
+    
+    try:
+        # Check if this participant has won any prizes (has history records as receiver)
+        won_count = History.query.filter_by(event_id=event.id, receiver_participant_id=participant.id).count()
+        
+        # Check if this participant has given in exchange mode (has history records as giver)
+        given_count = History.query.filter_by(event_id=event.id, giver_participant_id=participant.id).count()
+        
+        total_history = won_count + given_count
+        
+        if total_history > 0:
+            return jsonify({
+                'error': f'Cannot delete participant who has history in this event (won: {won_count}, given: {given_count}). Please reset the event first or use undo function.'
+            }), 400
+        
+        # Get participant info for response
+        participant_info = {
+            'id': participant.id,
+            'name': participant.name
+        }
+        
+        # Delete the participant
+        db.session.delete(participant)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Participant "{participant_info["name"]}" deleted successfully',
+            'deleted_participant': participant_info
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/event/<int:event_id>/add_prize', methods=['POST'])
 def add_prize(event_id):
     event = Event.query.get_or_404(event_id)
@@ -399,6 +513,109 @@ def add_prize(event_id):
             'remaining_quantity': prize.remaining_quantity
         }
     })
+
+@app.route('/api/event/<int:event_id>/edit_prize/<int:prize_id>', methods=['POST'])
+def edit_prize(event_id, prize_id):
+    event = Event.query.get_or_404(event_id)
+    
+    if event.event_type != 'classic':
+        return jsonify({'error': 'Prizes only available for classic events'}), 400
+    
+    prize = Prize.query.filter_by(id=prize_id, event_id=event.id).first()
+    if not prize:
+        return jsonify({'error': 'Prize not found'}), 404
+    
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    # Validate required fields
+    if 'name' not in data or 'remaining_quantity' not in data:
+        return jsonify({'error': 'Name and remaining_quantity are required'}), 400
+    
+    try:
+        new_name = data['name'].strip()
+        new_remaining_quantity = int(data['remaining_quantity'])
+        
+        if not new_name:
+            return jsonify({'error': 'Prize name cannot be empty'}), 400
+        
+        if new_remaining_quantity < 0:
+            return jsonify({'error': 'Remaining quantity cannot be negative'}), 400
+        
+        # Calculate new total quantity based on drawn + remaining
+        original_drawn = prize.total_quantity - prize.remaining_quantity
+        new_total_quantity = original_drawn + new_remaining_quantity
+        
+        if new_total_quantity <= 0:
+            return jsonify({'error': 'Total quantity must be positive'}), 400
+        
+        # Update the prize
+        prize.name = new_name
+        prize.total_quantity = new_total_quantity
+        prize.remaining_quantity = new_remaining_quantity
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Prize updated successfully',
+            'prize': {
+                'id': prize.id,
+                'name': prize.name,
+                'total_quantity': prize.total_quantity,
+                'remaining_quantity': prize.remaining_quantity
+            }
+        })
+        
+    except ValueError:
+        return jsonify({'error': 'Invalid quantity values'}), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/event/<int:event_id>/delete_prize/<int:prize_id>', methods=['POST'])
+def delete_prize(event_id, prize_id):
+    event = Event.query.get_or_404(event_id)
+    
+    if event.event_type != 'classic':
+        return jsonify({'error': 'Prizes only available for classic events'}), 400
+    
+    prize = Prize.query.filter_by(id=prize_id, event_id=event.id).first()
+    if not prize:
+        return jsonify({'error': 'Prize not found'}), 404
+    
+    try:
+        # Check if this prize has been drawn (has history records)
+        drawn_count = History.query.filter_by(event_id=event.id, prize_id=prize.id).count()
+        
+        if drawn_count > 0:
+            return jsonify({
+                'error': f'Cannot delete prize that has been drawn to {drawn_count} winner(s). Please reset the event first or use undo function.'
+            }), 400
+        
+        # Get prize info for response
+        prize_info = {
+            'id': prize.id,
+            'name': prize.name,
+            'total_quantity': prize.total_quantity,
+            'remaining_quantity': prize.remaining_quantity
+        }
+        
+        # Delete the prize
+        db.session.delete(prize)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Prize "{prize_info["name"]}" deleted successfully',
+            'deleted_prize': prize_info
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/event/<int:event_id>/reset', methods=['POST'])
 def reset_event(event_id):
@@ -448,7 +665,7 @@ def update_event_settings(event_id):
             event.config_draw_text = data['draw_text'].strip()
         
         if 'music' in data:
-            valid_music = ['default_upbeat', 'dramatic', 'festive', 'none']
+            valid_music = ['drumroll.mp3', 'snare_and_drum.mp3', 'tada.mp3', 'none']
             if data['music'] in valid_music:
                 event.config_music_id = data['music']
             else:
@@ -554,7 +771,7 @@ def undo_last_draw(event_id):
                 'receiver_name': record.receiver.name,
                 'giver_name': record.giver.name if record.giver else None,
                 'prize_name': record.prize.name if record.prize else None,
-                'drawn_at': record.drawn_at.strftime('%d/%m/%Y %H:%M:%S')
+                'drawn_at': format_thai_datetime(record.drawn_at)
             })
             
             # Delete the history record
@@ -795,6 +1012,36 @@ def import_prizes(event_id):
         if 'filepath' in locals() and os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({'error': f'File processing error: {str(e)}'}), 500
+
+@app.route('/api/event/<int:event_id>/export_history', methods=['GET'])
+def export_history(event_id):
+    event = Event.query.get_or_404(event_id)
+    history_records = History.query.filter_by(event_id=event.id).order_by(History.drawn_at.asc()).all()
+
+    history_data = []
+    for record in history_records:
+        history_item = {
+            'Winner Name': record.receiver.name,
+            'Prize': record.prize.name if record.prize else '',
+            'Giver Name': record.giver.name if record.giver else '',
+            'Drawn At': format_thai_datetime(record.drawn_at)
+        }
+        history_data.append(history_item)
+
+    df = pd.DataFrame(history_data)
+    
+    # Create an in-memory Excel file
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Draw History')
+    output.seek(0)
+
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'event_{event.id}_history.xlsx'
+    )
 
 # Initialize database tables
 with app.app_context():
