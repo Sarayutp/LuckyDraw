@@ -280,9 +280,12 @@ def handle_exchange_draw(event):
     # Get participants who haven't received yet (excluding current giver)
     received_participant_ids = [record.receiver_participant_id for record in history_records]
     
+    # Always exclude the current giver from available receivers
+    excluded_ids = received_participant_ids + [current_giver.id]
+    
     available_receivers = Participant.query.filter(
         Participant.event_id == event.id,
-        ~Participant.id.in_(received_participant_ids)
+        ~Participant.id.in_(excluded_ids)
     ).all()
     
     if not available_receivers:
@@ -297,7 +300,8 @@ def handle_exchange_draw(event):
         'giver_name': current_giver.name,
         'receiver_name': receiver.name,
         'draw_type': 'exchange',
-        'is_test_mode': event.is_test_mode
+        'is_test_mode': event.is_test_mode,
+        'is_first_draw': len(history_records) == 0  # True if this is the first draw
     }
     
     # If in test mode, return the result without committing to database
@@ -305,9 +309,12 @@ def handle_exchange_draw(event):
         return jsonify(response_data)
     
     # Create history record (only in real mode)
+    # For first draw, don't set giver_participant_id
+    giver_id = None if len(history_records) == 0 else current_giver.id
+    
     history_record = History(
         event_id=event.id,
-        giver_participant_id=current_giver.id,
+        giver_participant_id=giver_id,
         receiver_participant_id=receiver.id,
         drawn_at=get_thai_time()
     )
@@ -349,8 +356,9 @@ def get_event_state(event_id):
         
         if event.event_type == 'classic' and record.prize:
             history_item['prize_name'] = record.prize.name
-        elif event.event_type == 'exchange' and record.giver:
-            history_item['giver_name'] = record.giver.name
+        elif event.event_type == 'exchange':
+            # For exchange mode, add giver_name if exists (None for first draw)
+            history_item['giver_name'] = record.giver.name if record.giver else None
             
         history_data.append(history_item)
     
