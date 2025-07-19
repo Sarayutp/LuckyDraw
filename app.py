@@ -838,11 +838,7 @@ def import_participants(event_id):
                 skipped_count += 1
                 continue
             
-            # Check if participant already exists
-            existing = Participant.query.filter_by(event_id=event.id, name=participant_name).first()
-            if existing:
-                skipped_count += 1
-                continue
+            # Allow duplicate names - no checking for existing participants
             
             try:
                 participant = Participant(
