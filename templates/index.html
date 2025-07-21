@@ -281,10 +281,17 @@
                                         <span>📋 ประวัติ: ${event.history_count}</span>
                                     </div>
                                 </div>
-                                <button onclick="window.location.href='/event/${event.id}'" 
-                                        class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition duration-200 text-sm">
-                                    เข้าสู่อีเวนต์
-                                </button>
+                                <div class="flex gap-2">
+                                    <button onclick="window.location.href='/event/${event.id}'" 
+                                            class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition duration-200 text-sm">
+                                        เข้าสู่อีเวนต์
+                                    </button>
+                                    <button onclick="confirmDeleteEventFromList(${event.id}, '${escapeHtml(event.name)}')" 
+                                            class="bg-red-600 text-white px-3 py-2 rounded-lg hover:bg-red-700 transition duration-200 text-sm"
+                                            title="ลบอีเวนต์นี้">
+                                        🗑️
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     `).join('');
@@ -312,6 +319,49 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Delete event functions for event list
+        function confirmDeleteEventFromList(eventId, eventName) {
+            const confirmed = confirm(
+                `⚠️ ยืนยันการลบ Event นี้?\n\n` +
+                `Event: "${eventName}"\n\n` +
+                `การกระทำนี้จะลบ:\n` +
+                `• ผู้เข้าร่วมทั้งหมด\n` +
+                `• รางวัลทั้งหมด\n` +
+                `• ประวัติการจับรางวัลทั้งหมด\n` +
+                `• Event ทั้งหมด\n\n` +
+                `❌ ไม่สามารถยกเลิกได้หลังจากลบแล้ว!`
+            );
+            
+            if (confirmed) {
+                deleteEventFromList(eventId);
+            }
+        }
+
+        async function deleteEventFromList(eventId) {
+            try {
+                const response = await fetch(`/api/event/${eventId}/delete`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('✅ ' + data.message);
+                    // Reload events list
+                    loadExistingEvents();
+                } else {
+                    alert('❌ เกิดข้อผิดพลาด: ' + data.error);
+                }
+                
+            } catch (error) {
+                console.error('Error deleting event:', error);
+                alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์');
+            }
         }
 
         // Auto-trigger confetti on page load

@@ -152,6 +152,12 @@ async function loadEventState() {
 function updateParticipantsList(participants) {
     const participantsList = document.getElementById('participantsList');
     const participantsCount = document.getElementById('participantsCount');
+    const shuffleBtn = document.getElementById('shuffleParticipantsBtn');
+    
+    // Show/hide shuffle button based on participant count
+    if (shuffleBtn) {
+        shuffleBtn.style.display = participants.length >= 2 ? 'block' : 'none';
+    }
     
     if (participants.length === 0) {
         participantsList.innerHTML = '<div class="text-gray-500 text-center py-4">ยังไม่มีผู้เข้าร่วม</div>';
@@ -179,6 +185,60 @@ function updateParticipantsList(participants) {
     }
     
     participantsCount.textContent = `ทั้งหมด ${participants.length} คน`;
+}
+
+// Shuffle participants order
+function shuffleParticipants() {
+    const shuffleBtn = document.getElementById('shuffleParticipantsBtn');
+    const participantsList = document.getElementById('participantsList');
+    
+    // Disable button during request
+    if (shuffleBtn) {
+        shuffleBtn.disabled = true;
+        shuffleBtn.innerHTML = '🔄 กำลังสุ่ม...';
+    }
+    
+    // Add visual feedback - fade out participants list
+    if (participantsList) {
+        participantsList.style.opacity = '0.5';
+        participantsList.style.transform = 'scale(0.98)';
+        participantsList.style.transition = 'all 0.3s ease';
+    }
+    
+    fetch(`/api/event/${eventId}/shuffle_participants`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log('✅', data.message);
+            
+            // โหลดข้อมูลใหม่แทนการ refresh หน้า
+            loadEventState();
+            
+        } else {
+            console.error('❌', data.error || 'เกิดข้อผิดพลาดในการสุ่มลำดับ');
+            alert('เกิดข้อผิดพลาด: ' + (data.error || 'เกิดข้อผิดพลาดในการสุ่มลำดับ'));
+        }
+    })
+    .catch(error => {
+        console.error('Error shuffling participants:', error);
+        alert('เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์');
+    })
+    .finally(() => {
+        // Re-enable button and restore list appearance
+        if (shuffleBtn) {
+            shuffleBtn.disabled = false;
+            shuffleBtn.innerHTML = '🔀 สุ่มลำดับ';
+        }
+        if (participantsList) {
+            participantsList.style.opacity = '1';
+            participantsList.style.transform = 'scale(1)';
+        }
+    });
 }
 
 // Update prizes list
@@ -1691,6 +1751,7 @@ async function deleteParticipant(participantId, participantName) {
         showError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     }
 }
+
 
 // Global functions for template onclick handlers
 window.closeSettingsModal = closeSettingsModal;

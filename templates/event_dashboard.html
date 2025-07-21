@@ -455,7 +455,13 @@
             <div class="space-y-6">
                 <!-- Remaining Participants -->
                 <div class="bg-white rounded-lg shadow-md p-6">
-                    <h2 class="text-xl font-semibold text-gray-800 mb-4">👥 ผู้เข้าร่วมที่เหลือ</h2>
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-semibold text-gray-800">👥 ผู้เข้าร่วมที่เหลือ</h2>
+                        <button id="shuffleParticipantsBtn" onclick="shuffleParticipants()" 
+                                class="bg-purple-600 text-white px-3 py-1 rounded-lg hover:bg-purple-700 transition duration-200 text-sm font-medium">
+                            🔀 สุ่มลำดับ
+                        </button>
+                    </div>
                     <div id="participantsList" class="space-y-2 max-h-64 overflow-y-auto">
                         <!-- Will be populated by JavaScript -->
                     </div>

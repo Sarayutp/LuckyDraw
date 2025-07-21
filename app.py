@@ -309,7 +309,7 @@ def get_event_state(event_id):
     remaining_participants = Participant.query.filter(
         Participant.event_id == event.id,
         ~Participant.id.in_(won_participant_ids)
-    ).all()
+    ).order_by(Participant.id).all()
     
     # Get remaining prizes
     remaining_prizes = Prize.query.filter(
@@ -780,6 +780,64 @@ def undo_last_draw(event_id):
             }
         
         return jsonify(response_data)
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/event/<int:event_id>/shuffle_participants', methods=['POST'])
+def shuffle_participants(event_id):
+    """Shuffle the order of participants randomly"""
+    event = Event.query.get_or_404(event_id)
+    
+    try:
+        # Get all participants for this event ordered by ID
+        participants = Participant.query.filter_by(event_id=event_id).order_by(Participant.id).all()
+        
+        if len(participants) < 2:
+            return jsonify({'error': 'Need at least 2 participants to shuffle'}), 400
+        
+        # Get all participant names and shuffle them
+        participant_names = [p.name for p in participants]
+        random.shuffle(participant_names)
+        
+        # Update participants with new shuffled names
+        for i, participant in enumerate(participants):
+            participant.name = participant_names[i]
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully shuffled {len(participants)} participants',
+            'participants': [{'id': p.id, 'name': p.name} for p in participants]
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/event/<int:event_id>/delete', methods=['DELETE'])
+def delete_event(event_id):
+    """Delete an entire event and all associated data"""
+    event = Event.query.get_or_404(event_id)
+    
+    try:
+        event_name = event.name
+        
+        # Delete all associated data (cascade should handle this, but being explicit)
+        History.query.filter_by(event_id=event.id).delete()
+        Prize.query.filter_by(event_id=event.id).delete()
+        Participant.query.filter_by(event_id=event.id).delete()
+        
+        # Delete the event itself
+        db.session.delete(event)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Event "{event_name}" deleted successfully'
+        })
         
     except Exception as e:
         db.session.rollback()
