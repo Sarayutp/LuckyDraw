@@ -20,7 +20,7 @@ class Event(db.Model):
     
     # Configuration fields with defaults
     config_delay_ms = db.Column(db.Integer, default=2000)
-    config_music_id = db.Column(db.String(100), default='default_upbeat')
+    config_music_id = db.Column(db.String(100), default='none')
     config_random_animation = db.Column(db.String(100), default='scrolling_names')
     config_winner_animation = db.Column(db.String(100), default='confetti')
     config_draw_text = db.Column(db.String(100), default='จับรางวัล')

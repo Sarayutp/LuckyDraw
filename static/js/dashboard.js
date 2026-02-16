@@ -3,8 +3,10 @@ let eventId;
 let eventType;
 let drumRollSound;
 let tadaSound;
+let backgroundMusic;
 let isDrawing = false;
 let eventConfig = {};
+let wasMusicPlaying = false;
 
 // Initialize dashboard
 function initializeDashboard() {
@@ -117,12 +119,7 @@ function initializeAudio() {
     if (tadaSound) tadaSound.volume = 0.8;
     if (backgroundMusic) backgroundMusic.volume = 0.3;
 
-    // Enable audio on first user interaction
-    document.addEventListener('click', () => {
-        if (backgroundMusic && backgroundMusic.paused && eventConfig.music && eventConfig.music !== 'none') {
-            backgroundMusic.play().catch(e => console.warn("Background music autoplay failed.", e));
-        }
-    }, { once: true });
+    initializeWebAudio();
 }
 
 // Load current event state
@@ -135,6 +132,7 @@ async function loadEventState() {
         updatePrizesList(data.remaining_prizes);
         updatePrizeSelectionList(data.remaining_prizes);
         updateHistoryList(data.history);
+        updateDrawButtonState();
         
         // Update event config
         if (data.config) {
@@ -214,10 +212,10 @@ function shuffleParticipants() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            console.log('✅', data.message);
-            
-            // โหลดข้อมูลใหม่แทนการ refresh หน้า
-            loadEventState();
+            if (Array.isArray(data.participants)) {
+                updateParticipantsList(data.participants);
+            }
+            showSuccess('สุ่มลำดับผู้เข้าร่วมบนหน้าจอเรียบร้อยแล้ว');
             
         } else {
             console.error('❌', data.error || 'เกิดข้อผิดพลาดในการสุ่มลำดับ');
@@ -403,6 +401,14 @@ async function addPrize() {
 async function performDraw() {
     if (isDrawing) return;
     
+    if (eventType === 'classic') {
+        const selectedPrizes = getSelectedPrizes();
+        if (selectedPrizes.length === 0) {
+            showError('กรุณาเลือกรางวัลอย่างน้อย 1 รายการก่อนจับรางวัล');
+            return;
+        }
+    }
+
     isDrawing = true;
     const drawButton = document.getElementById('drawButton');
     const drawStatus = document.getElementById('drawStatus');
@@ -418,15 +424,13 @@ async function performDraw() {
     try {
         // Use configured delay or default
         const delayMs = eventConfig.delay_ms || 2000;
-        await new Promise(resolve => setTimeout(resolve, delayMs + Math.random() * 1000));
+        await new Promise(resolve => setTimeout(resolve, delayMs));
         
         // Get selected prizes for classic mode
         let requestBody = {};
         if (eventType === 'classic') {
             const selectedPrizes = getSelectedPrizes();
-            if (selectedPrizes.length > 0) {
-                requestBody.selected_prizes = selectedPrizes;
-            }
+            requestBody.selected_prizes = selectedPrizes;
         }
         
         const response = await fetch(`/api/event/${eventId}/draw`, {
@@ -465,9 +469,9 @@ async function performDraw() {
     } finally {
         // Re-enable button
         isDrawing = false;
-        drawButton.disabled = false;
-        drawButton.innerHTML = '🎲 จับรางวัล';
+        drawButton.innerHTML = `🎲 ${escapeHtml(eventConfig.draw_text || 'จับรางวัล')}`;
         drawStatus.textContent = '';
+        updateDrawButtonState();
     }
 }
 
@@ -478,68 +482,17 @@ function closeWinnerModal() {
     modal.classList.add('hidden');
 }
 
-function startRandomizationEffect() {
-    const overlay = document.getElementById('randomizationOverlay');
-    overlay.classList.remove('hidden');
-
-    wasMusicPlaying = backgroundMusic && !backgroundMusic.paused;
-    if (wasMusicPlaying) {
-        backgroundMusic.pause();
-    }
-
-    playDrumRollSound();
-
-    const randomizingText = document.getElementById('randomizingText');
-    const animationType = eventConfig.random_animation || 'scrolling_names';
-    startRandomAnimation(randomizingText, animationType);
-}
-
 // Stop randomization effect
 function stopRandomizationEffect() {
     document.getElementById('randomizationOverlay').classList.add('hidden');
     stopDrumRollSound();
+    if (backgroundMusic) {
+        backgroundMusic.pause();
+        backgroundMusic.currentTime = 0;
+    }
     if (window.randomizationInterval) {
         clearInterval(window.randomizationInterval);
         window.randomizationInterval = null;
-    }
-}
-
-// Audio playback functions
-function playDrumRollSound() {
-    if (drumRollSound) {
-        drumRollSound.currentTime = 0;
-        drumRollSound.play().catch(e => console.warn('Drum roll playback failed.', e));
-    }
-}
-
-function stopDrumRollSound() {
-    if (drumRollSound) {
-        drumRollSound.pause();
-        drumRollSound.currentTime = 0;
-    }
-}
-
-function playTadaSound() {
-    if (tadaSound) {
-        tadaSound.currentTime = 0;
-        tadaSound.play().catch(e => console.warn('Tada playback failed.', e));
-        tadaSound.onended = () => {
-            if (wasMusicPlaying) {
-                playBackgroundMusic();
-                wasMusicPlaying = false;
-            }
-        };
-    } else if (wasMusicPlaying) {
-        setTimeout(() => {
-            playBackgroundMusic();
-            wasMusicPlaying = false;
-        }, 1000);
-    }
-}
-
-function playBackgroundMusic() {
-    if (backgroundMusic && eventConfig.music && eventConfig.music !== 'none') {
-        backgroundMusic.play().catch(e => console.warn("Could not resume background music.", e));
     }
 }
 
@@ -608,6 +561,12 @@ function playTadaSound() {
     }
 }
 
+function playBackgroundMusic() {
+    if (backgroundMusic && eventConfig.music_id && eventConfig.music_id !== 'none') {
+        backgroundMusic.play().catch(e => console.warn("Could not resume background music.", e));
+    }
+}
+
 // Web Audio API fallback sounds
 function playDrumRollFallback() {
     if (!audioContext) return;
@@ -629,17 +588,21 @@ function playDrumRollFallback() {
         gainNode.connect(audioContext.destination);
         
         // Configure based on music setting
-        const musicType = eventConfig.music_id || 'default_upbeat';
+        const musicType = eventConfig.music_id || 'none';
         switch (musicType) {
-            case 'dramatic':
+            case 'drumroll.mp3':
                 drumRollOscillator.frequency.setValueAtTime(80, audioContext.currentTime);
                 drumRollOscillator.frequency.exponentialRampToValueAtTime(120, audioContext.currentTime + 2);
                 break;
-            case 'festive':
+            case 'snare_and_drum.mp3':
                 drumRollOscillator.frequency.setValueAtTime(200, audioContext.currentTime);
                 drumRollOscillator.frequency.exponentialRampToValueAtTime(400, audioContext.currentTime + 1);
                 break;
-            default: // default_upbeat
+            case 'tada.mp3':
+                drumRollOscillator.frequency.setValueAtTime(260, audioContext.currentTime);
+                drumRollOscillator.frequency.exponentialRampToValueAtTime(520, audioContext.currentTime + 1);
+                break;
+            default:
                 drumRollOscillator.frequency.setValueAtTime(150, audioContext.currentTime);
                 drumRollOscillator.frequency.exponentialRampToValueAtTime(300, audioContext.currentTime + 1.5);
                 break;
@@ -716,44 +679,6 @@ function playTadaTone(frequency, delay, duration) {
     oscillator.stop(audioContext.currentTime + delay + duration);
 }
 
-// Confetti effect using canvas-confetti
-function triggerConfetti() {
-    // Multiple confetti bursts for better effect
-    const count = 200;
-    const defaults = {
-        origin: { y: 0.7 }
-    };
-
-    function fire(particleRatio, opts) {
-        confetti(Object.assign({}, defaults, opts, {
-            particleCount: Math.floor(count * particleRatio)
-        }));
-    }
-
-    fire(0.25, {
-        spread: 26,
-        startVelocity: 55,
-    });
-    fire(0.2, {
-        spread: 60,
-    });
-    fire(0.35, {
-        spread: 100,
-        decay: 0.91,
-        scalar: 0.8
-    });
-    fire(0.1, {
-        spread: 120,
-        startVelocity: 25,
-        decay: 0.92,
-        scalar: 1.2
-    });
-    fire(0.1, {
-        spread: 120,
-        startVelocity: 45,
-    });
-}
-
 // Reset event function
 async function resetEvent() {
     const confirmed = confirm('คุณแน่ใจหรือไม่ว่าต้องการรีเซ็ตอีเวนต์?\n\nการดำเนินการนี้จะ:\n- ลบประวัติการจับรางวัลทั้งหมด\n- รีเซ็ตจำนวนรางวัลกลับสู่สถานะเริ่มต้น\n\nการกระทำนี้ไม่สามารถยกเลิกได้!');
@@ -810,7 +735,7 @@ function populateSettingsForm() {
     // Populate form fields with current config
     document.getElementById('configDelay').value = (eventConfig.delay_ms || 2000) / 1000;
     document.getElementById('configDrawText').value = eventConfig.draw_text || 'จับรางวัล';
-    document.getElementById('configMusic').value = eventConfig.music_id || 'default_upbeat';
+    document.getElementById('configMusic').value = eventConfig.music_id || 'none';
     document.getElementById('configRandomAnimation').value = eventConfig.random_animation || 'scrolling_names';
     document.getElementById('configWinnerAnimation').value = eventConfig.winner_animation || 'confetti';
     document.getElementById('configBackgroundUrl').value = eventConfig.background_url || '';
@@ -875,17 +800,23 @@ function applyEventConfig() {
     
     // Apply background music
     if (backgroundMusic) {
-        const musicFile = eventConfig.music || 'none';
+        const musicFile = eventConfig.music_id || 'none';
         if (musicFile !== 'none') {
             const currentSrc = backgroundMusic.src || '';
             if (!currentSrc.endsWith(musicFile)) {
                 backgroundMusic.src = `/static/audio/${musicFile}`;
+                backgroundMusic.currentTime = 0;
             }
-            backgroundMusic.play().catch(e => console.warn("Autoplay for background music might be blocked by the browser.", e));
         } else {
             backgroundMusic.pause();
+            backgroundMusic.currentTime = 0;
+            backgroundMusic.removeAttribute('src');
         }
     }
+}
+
+function canUseConfetti() {
+    return typeof confetti === 'function';
 }
 
 // Enhanced confetti based on winner animation config
@@ -910,6 +841,7 @@ function triggerConfetti() {
 }
 
 function triggerDefaultConfetti() {
+    if (!canUseConfetti()) return;
     // Original confetti effect
     const count = 200;
     const defaults = {
@@ -947,6 +879,7 @@ function triggerDefaultConfetti() {
 }
 
 function triggerFireworks() {
+    if (!canUseConfetti()) return;
     const duration = 3 * 1000;
     const animationEnd = Date.now() + duration;
     const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 0 };
@@ -975,6 +908,7 @@ function triggerFireworks() {
 }
 
 function triggerBalloons() {
+    if (!canUseConfetti()) return;
     confetti({
         particleCount: 100,
         spread: 70,
@@ -984,6 +918,7 @@ function triggerBalloons() {
 }
 
 function triggerSparkles() {
+    if (!canUseConfetti()) return;
     const count = 200;
     const defaults = {
         origin: { y: 0.7 },
@@ -1017,6 +952,13 @@ function startRandomizationEffect() {
     const randomizingText = document.getElementById('randomizingText');
     
     overlay.classList.remove('hidden');
+
+    // Start configured background music only when drawing begins
+    if (backgroundMusic && backgroundMusic.paused && eventConfig.music_id && eventConfig.music_id !== 'none') {
+        playBackgroundMusic();
+    }
+
+    wasMusicPlaying = backgroundMusic && !backgroundMusic.paused;
     
     // Play drum roll sound
     playDrumRollSound();
@@ -1139,33 +1081,22 @@ async function toggleTestMode() {
 }
 
 async function undoLastDraw() {
-    console.log('undoLastDraw function called'); // Debug log
-    
     const confirmed = confirm('คุณแน่ใจหรือไม่ว่าต้องการยกเลิกการจับรางวัลครั้งล่าสุด?\n\nการกระทำนี้จะ:\n- ลบผลการจับรางวัลครั้งล่าสุด\n- คืนสถานะรางวัลและผู้เข้าร่วม\n\nการกระทำนี้ไม่สามารถยกเลิกได้!');
     
-    if (!confirmed) {
-        console.log('User cancelled undo'); // Debug log
-        return;
-    }
+    if (!confirmed) return;
     
     const undoButton = document.getElementById('undoButton');
     undoButton.disabled = true;
     undoButton.textContent = '⏳ กำลังยกเลิก...';
     
     try {
-        console.log('Making undo API call to:', `/api/event/${eventId}/undo_draw`); // Debug log
-        
         const response = await fetch(`/api/event/${eventId}/undo_draw`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             }
         });
-        
-        console.log('Undo API response status:', response.status); // Debug log
-        
         const data = await response.json();
-        console.log('Undo API response data:', data); // Debug log
         
         if (data.success) {
             if (data.multiple_undone) {
@@ -1443,6 +1374,7 @@ function updatePrizeSelectionList(prizes) {
             checkbox.addEventListener('change', function() {
                 updatePrizeQuantityInput(this);
                 updateSelectAllCheckbox();
+                updateDrawButtonState();
             });
         });
         
@@ -1453,6 +1385,8 @@ function updatePrizeSelectionList(prizes) {
             });
         });
     }
+
+    updateDrawButtonState();
 }
 
 function updatePrizeQuantityInput(checkbox) {
@@ -1483,6 +1417,7 @@ function toggleAllPrizes(checked) {
         checkbox.checked = checked;
         updatePrizeQuantityInput(checkbox);
     });
+    updateDrawButtonState();
 }
 
 function updateSelectAllCheckbox() {
@@ -1519,6 +1454,28 @@ function getSelectedPrizes() {
     });
     
     return selectedPrizes;
+}
+
+function updateDrawButtonState() {
+    const drawButton = document.getElementById('drawButton');
+    if (!drawButton) return;
+
+    if (eventType !== 'classic') {
+        drawButton.disabled = isDrawing;
+        return;
+    }
+
+    const selectedCount = document.querySelectorAll('.prize-checkbox:checked').length;
+    const canDraw = selectedCount > 0;
+    drawButton.disabled = isDrawing;
+
+    if (!canDraw) {
+        drawButton.classList.add('opacity-90');
+        drawButton.title = 'กรุณาเลือกรางวัลก่อนจับรางวัล';
+    } else {
+        drawButton.classList.remove('opacity-90');
+        drawButton.title = '';
+    }
 }
 
 function exportHistory() {

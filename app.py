@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file
 from models import db, Event, Participant, Prize, History
 import random
 from datetime import datetime, timedelta
@@ -7,6 +7,8 @@ import pandas as pd
 from werkzeug.utils import secure_filename
 import io
 import pytz
+from uuid import uuid4
+from threading import Lock
 
 app = Flask(__name__)
 
@@ -14,7 +16,7 @@ app = Flask(__name__)
 basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(basedir, "luckydraw.db")}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-only-secret-key')
 app.config['UPLOAD_FOLDER'] = os.path.join(basedir, 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
@@ -32,6 +34,9 @@ db.init_app(app)
 
 # Thailand timezone
 THAILAND_TZ = pytz.timezone('Asia/Bangkok')
+VALID_MUSIC_OPTIONS = {'drumroll.mp3', 'snare_and_drum.mp3', 'tada.mp3', 'none'}
+_draw_locks = {}
+_draw_locks_guard = Lock()
 
 def get_thai_time():
     """Get current time in Thailand timezone"""
@@ -55,6 +60,17 @@ def format_thai_datetime(dt):
         thai_dt = dt.astimezone(THAILAND_TZ)
         return thai_dt.strftime('%d/%m/%Y %H:%M:%S')
 
+def normalize_music_id(music_id):
+    if music_id in VALID_MUSIC_OPTIONS:
+        return music_id
+    return 'none'
+
+def get_draw_lock(event_id):
+    with _draw_locks_guard:
+        if event_id not in _draw_locks:
+            _draw_locks[event_id] = Lock()
+        return _draw_locks[event_id]
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -75,8 +91,13 @@ def winner_showcase(event_id):
 
 @app.route('/api/event/<int:event_id>/draw', methods=['POST'])
 def draw_lucky(event_id):
+    event = None
+    draw_lock = None
     try:
         event = Event.query.get_or_404(event_id)
+        draw_lock = get_draw_lock(event.id)
+        if not draw_lock.acquire(blocking=False):
+            return jsonify({'error': 'Draw already in progress for this event'}), 409
         
         if event.event_type == 'classic':
             return handle_classic_draw(event)
@@ -86,10 +107,13 @@ def draw_lucky(event_id):
             return jsonify({'error': 'Invalid event type'}), 400
             
     except Exception as e:
-        # Only rollback if not in test mode
-        if not event.is_test_mode:
+        # Only rollback if event exists and is not in test mode
+        if event is not None and not event.is_test_mode:
             db.session.rollback()
         return jsonify({'error': str(e)}), 500
+    finally:
+        if draw_lock is not None and draw_lock.locked():
+            draw_lock.release()
 
 def handle_classic_draw(event):
     from flask import request
@@ -106,59 +130,61 @@ def handle_classic_draw(event):
     if not available_participants:
         return jsonify({'error': 'No participants available for drawing'}), 400
     
-    # Check if specific prizes are selected for drawing
+    # Require explicit prize selection for classic mode
     selected_prizes = None
     if request.is_json and request.json:
         selected_prizes = request.json.get('selected_prizes')
+    if not selected_prizes:
+        return jsonify({'error': 'Please select at least one prize to draw'}), 400
+
+    # Get only selected prizes that are available
+    prize_ids = [p['prize_id'] for p in selected_prizes if isinstance(p, dict) and 'prize_id' in p]
+    selected_available_prizes = Prize.query.filter(
+        Prize.event_id == event.id,
+        Prize.id.in_(prize_ids),
+        Prize.remaining_quantity > 0
+    ).all()
+
+    prize_by_id = {prize.id: prize for prize in selected_available_prizes}
     
-    if selected_prizes:
-        # Get only selected prizes that are available
-        prize_ids = [p['prize_id'] for p in selected_prizes]
-        available_prizes = Prize.query.filter(
-            Prize.event_id == event.id,
-            Prize.id.in_(prize_ids),
-            Prize.remaining_quantity > 0
-        ).all()
+    # Create a weighted list based on selected quantities
+    weighted_prizes = []
+    for prize in selected_available_prizes:
+        selected_qty = 0
+        for sp in selected_prizes:
+            if not isinstance(sp, dict):
+                continue
+            if sp.get('prize_id') == prize.id:
+                try:
+                    requested_quantity = int(sp.get('quantity', 0))
+                except (TypeError, ValueError):
+                    requested_quantity = 0
+                selected_qty = min(max(requested_quantity, 0), prize.remaining_quantity)
+                break
         
-        # Create a weighted list based on selected quantities
-        weighted_prizes = []
-        for prize in available_prizes:
-            # Find the selected quantity for this prize
-            selected_qty = 1  # Default
-            for sp in selected_prizes:
-                if sp['prize_id'] == prize.id:
-                    # Use the selected quantity, but don't exceed remaining quantity
-                    selected_qty = min(sp['quantity'], prize.remaining_quantity)
-                    break
-            
-            # Add the prize multiple times based on selected quantity to increase probability
-            # This creates a weighted selection where prizes with higher quantity have higher chance
-            if selected_qty > 0:
-                weighted_prizes.extend([prize] * selected_qty)
-        
-        if not weighted_prizes:
-            return jsonify({'error': 'No selected prizes available for drawing'}), 400
-    else:
-        # Get all available prizes (original behavior)
-        available_prizes = Prize.query.filter(
-            Prize.event_id == event.id,
-            Prize.remaining_quantity > 0
-        ).all()
-        
-        if not available_prizes:
-            return jsonify({'error': 'No prizes available'}), 400
-        
-        weighted_prizes = available_prizes
+        # Weight by selected quantity
+        if selected_qty > 0:
+            weighted_prizes.extend([prize] * selected_qty)
+
+    if not weighted_prizes:
+        return jsonify({'error': 'No selected prizes available for drawing'}), 400
     
     # Calculate total quantity to draw
     total_quantity_to_draw = 1  # Default: draw 1 prize
     
-    if selected_prizes:
-        # Sum up all selected quantities
-        total_quantity_to_draw = sum(min(sp['quantity'], 
-                                       Prize.query.get(sp['prize_id']).remaining_quantity) 
-                                   for sp in selected_prizes 
-                                   if Prize.query.get(sp['prize_id']).remaining_quantity > 0)
+    # Sum up all selected quantities
+    total_quantity_to_draw = 0
+    for sp in selected_prizes:
+        if not isinstance(sp, dict):
+            continue
+        prize = prize_by_id.get(sp.get('prize_id'))
+        if not prize:
+            continue
+        try:
+            requested_quantity = int(sp.get('quantity', 0))
+        except (TypeError, ValueError):
+            continue
+        total_quantity_to_draw += min(max(requested_quantity, 0), prize.remaining_quantity)
     
     # Limit to available participants
     total_quantity_to_draw = min(total_quantity_to_draw, len(available_participants))
@@ -339,13 +365,21 @@ def get_event_state(event_id):
     return jsonify({
         'event_type': event.event_type,
         'remaining_participants': [{'id': p.id, 'name': p.name} for p in remaining_participants],
-        'remaining_prizes': [{'id': p.id, 'name': p.name, 'remaining_quantity': p.remaining_quantity} for p in remaining_prizes],
+        'remaining_prizes': [
+            {
+                'id': p.id,
+                'name': p.name,
+                'total_quantity': p.total_quantity,
+                'remaining_quantity': p.remaining_quantity
+            }
+            for p in remaining_prizes
+        ],
         'history': history_data,
         'is_test_mode': event.is_test_mode,
         'config': {
             'delay_ms': event.config_delay_ms,
             'draw_text': event.config_draw_text,
-            'music_id': event.config_music_id,
+            'music_id': normalize_music_id(event.config_music_id),
             'random_animation': event.config_random_animation,
             'winner_animation': event.config_winner_animation,
             'background_url': event.config_background_url,
@@ -647,8 +681,7 @@ def update_event_settings(event_id):
             event.config_draw_text = data['draw_text'].strip()
         
         if 'music' in data:
-            valid_music = ['drumroll.mp3', 'snare_and_drum.mp3', 'tada.mp3', 'none']
-            if data['music'] in valid_music:
+            if data['music'] in VALID_MUSIC_OPTIONS:
                 event.config_music_id = data['music']
             else:
                 return jsonify({'error': 'Invalid music option'}), 400
@@ -683,7 +716,7 @@ def update_event_settings(event_id):
             'config': {
                 'delay_ms': event.config_delay_ms,
                 'draw_text': event.config_draw_text,
-                'music_id': event.config_music_id,
+                'music_id': normalize_music_id(event.config_music_id),
                 'random_animation': event.config_random_animation,
                 'winner_animation': event.config_winner_animation,
                 'background_url': event.config_background_url,
@@ -788,29 +821,29 @@ def undo_last_draw(event_id):
 @app.route('/api/event/<int:event_id>/shuffle_participants', methods=['POST'])
 def shuffle_participants(event_id):
     """Shuffle the order of participants randomly"""
-    event = Event.query.get_or_404(event_id)
+    Event.query.get_or_404(event_id)
     
     try:
-        # Get all participants for this event ordered by ID
-        participants = Participant.query.filter_by(event_id=event_id).order_by(Participant.id).all()
+        # Keep behavior aligned with /state: shuffle only remaining participants
+        won_participant_ids = db.session.query(History.receiver_participant_id).filter_by(event_id=event_id).all()
+        won_participant_ids = [pid[0] for pid in won_participant_ids]
+
+        participants = Participant.query.filter(
+            Participant.event_id == event_id,
+            ~Participant.id.in_(won_participant_ids)
+        ).order_by(Participant.id).all()
         
         if len(participants) < 2:
-            return jsonify({'error': 'Need at least 2 participants to shuffle'}), 400
+            return jsonify({'error': 'Need at least 2 remaining participants to shuffle'}), 400
         
-        # Get all participant names and shuffle them
-        participant_names = [p.name for p in participants]
-        random.shuffle(participant_names)
-        
-        # Update participants with new shuffled names
-        for i, participant in enumerate(participants):
-            participant.name = participant_names[i]
-        
-        db.session.commit()
+        # Shuffle only the returned display order (do not mutate participant identities)
+        shuffled_participants = participants.copy()
+        random.shuffle(shuffled_participants)
         
         return jsonify({
             'success': True,
             'message': f'Successfully shuffled {len(participants)} participants',
-            'participants': [{'id': p.id, 'name': p.name} for p in participants]
+            'participants': [{'id': p.id, 'name': p.name} for p in shuffled_participants]
         })
         
     except Exception as e:
@@ -860,12 +893,12 @@ def import_participants(event_id):
     try:
         # Save uploaded file temporarily
         filename = secure_filename(file.filename)
+        file_extension = filename.rsplit('.', 1)[1].lower()
+        filename = f"{uuid4().hex}.{file_extension}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
         # Read file based on extension
-        file_extension = filename.rsplit('.', 1)[1].lower()
-        
         if file_extension == 'csv':
             df = pd.read_csv(filepath)
         else:  # xlsx or xls
@@ -951,12 +984,12 @@ def import_prizes(event_id):
     try:
         # Save uploaded file temporarily
         filename = secure_filename(file.filename)
+        file_extension = filename.rsplit('.', 1)[1].lower()
+        filename = f"{uuid4().hex}.{file_extension}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
         # Read file based on extension
-        file_extension = filename.rsplit('.', 1)[1].lower()
-        
         if file_extension == 'csv':
             df = pd.read_csv(filepath)
         else:  # xlsx or xls
@@ -1158,4 +1191,4 @@ with app.app_context():
     db.create_all()
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(debug=os.getenv('FLASK_DEBUG') == '1', port=5001)
